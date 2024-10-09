@@ -12,7 +12,7 @@ const (
 	// Top-level contexts
 	// DBPrimaryContext is used to store primary data
 	DBPrimaryContext byte = 0x00
-	// DBSecondaryContext is used to store secondary indexes, derived from primary data
+	// DBSecondaryContext is used to store secondary indices, derived from primary data
 	DBSecondaryContext byte = 0x01
 
 	// Prefixes for primary data
@@ -26,7 +26,7 @@ const (
 	// <DBPrimaryContext><DBMessagePrefix><MessageID> -> <Message>
 	DBPrimaryMessagePrefix byte = 0x02
 
-	// Prefixes for secondary indexes
+	// Prefixes for secondary indices
 	// DBSecondaryUserThreadTimestampPrefix is used to store user's threads by timestamp
 	// <DBSecondaryContext><DBSecondaryUserThreadTimestampPrefix><UserID><Timestamp> -> <Thread>
 	DBSecondaryUserThreadTimestampPrefix byte = 0x00
