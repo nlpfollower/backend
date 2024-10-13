@@ -65,7 +65,7 @@ func getThreads(dbPath, email string, pageSize int, maxTimestamp uint64) error {
 		return fmt.Errorf("error marshaling request body: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", "/v0/get-threads", bytes.NewBuffer(bodyBytes))
+	req, err := http.NewRequest("POST", "/api/v0/get-threads", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}

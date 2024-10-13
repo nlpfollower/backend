@@ -54,9 +54,19 @@ type User struct {
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
+type Space struct {
+	ID          Digest    `json:"id"`
+	UserID      Digest    `json:"user_id"`
+	ContentID   Digest    `json:"content_id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type Thread struct {
 	ID        Digest    `json:"id"`
-	UserID    Digest    `json:"user_id"`
+	SpaceID   Digest    `json:"space_id"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -64,7 +74,7 @@ type Thread struct {
 
 type CompoundMessageID struct {
 	ID        Digest `json:"id"`
-	MessageID int    `json:"message_id"`
+	MessageID uint64 `json:"message_id"`
 }
 
 type CompoundMessage struct {
@@ -72,9 +82,26 @@ type CompoundMessage struct {
 	ThreadID  Digest             `json:"thread_id"`
 	ParentID  *CompoundMessageID `json:"parent_id,omitempty"`
 	Author    string             `json:"author"`
-	Messages  []string           `json:"content"`
+	Messages  []string           `json:"messages"`
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
+}
+
+type ModelInfo struct {
+	ID        Digest    `json:"id"`
+	UserID    Digest    `json:"user_id"`
+	ContentID Digest    `json:"content_id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type ModelIteration struct {
+	ID          Digest    `json:"id"`
+	ModelID     Digest    `json:"model_id"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	Index       uint64    `json:"index"`
 }
 
 func NewKeyFromUint64(value uint64) Digest {

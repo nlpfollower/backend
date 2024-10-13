@@ -33,22 +33,34 @@ func (router *APIRouter) CreateMessage(w http.ResponseWriter, req *http.Request)
 		http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 		return
 	}
+
+	// Get the user ID from the claims
+	userID, err := storage.DigestFromString(claims.UserID)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
 	// Get the thread
 	thread, err := router.dbManager.GetThread(createReq.ThreadID)
 	if err != nil {
 		http.Error(w, errors.Wrap(err, "Failed to get thread").Error(), http.StatusInternalServerError)
 		return
 	}
-	// Verify the user in the AuthToken is the same as the user who created the thread
-	userID, err := storage.DigestFromString(claims.UserID)
+
+	// Get the space
+	space, err := router.dbManager.GetSpace(thread.SpaceID)
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		http.Error(w, errors.Wrap(err, "Failed to get space").Error(), http.StatusInternalServerError)
 		return
 	}
-	if thread.UserID != userID {
-		http.Error(w, "User does not have permission to create messages in this thread", http.StatusUnauthorized)
+
+	// Verify the user has permission to create messages in this space
+	if space.UserID != userID {
+		http.Error(w, "User does not have permission to create messages in this space", http.StatusUnauthorized)
 		return
 	}
+
 	// Verify that ParentID is a valid message in the thread, if it is not nil
 	if createReq.ParentID != nil {
 		if _, err := router.dbManager.GetMessage(createReq.ParentID.ID); err != nil {
@@ -66,7 +78,7 @@ func (router *APIRouter) CreateMessage(w http.ResponseWriter, req *http.Request)
 	// Create the CompoundMessage
 	timeNow := time.Now()
 	message := &storage.CompoundMessage{
-		ID:        storage.NewDigest(messageIDBytes), // Generate a unique ID
+		ID:        storage.NewDigest(messageIDBytes),
 		ThreadID:  createReq.ThreadID,
 		ParentID:  createReq.ParentID,
 		Author:    createReq.Author,
@@ -116,15 +128,24 @@ func (router *APIRouter) GetMessages(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
+
 	// Get the thread
 	thread, err := router.dbManager.GetThread(getReq.ThreadID)
 	if err != nil {
 		http.Error(w, errors.Wrap(err, "Failed to get thread").Error(), http.StatusInternalServerError)
 		return
 	}
-	// Verify the user in the AuthToken is the same as the user who created the thread
-	if thread.UserID != userID {
-		http.Error(w, "User does not have permission to view messages in this thread", http.StatusUnauthorized)
+
+	// Get the space
+	space, err := router.dbManager.GetSpace(thread.SpaceID)
+	if err != nil {
+		http.Error(w, errors.Wrap(err, "Failed to get space").Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Verify the user has permission to view messages in this space
+	if space.UserID != userID {
+		http.Error(w, "User does not have permission to view messages in this space", http.StatusUnauthorized)
 		return
 	}
 

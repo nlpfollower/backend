@@ -12,7 +12,7 @@ import (
 type SignUpRequest struct {
 	Email       string             `json:"email"`
 	Username    string             `json:"username"`
-	PasswordHex string             `json:"password"`
+	PasswordHex string             `json:"password_hex"`
 	Method      storage.AuthMethod `json:"method"`
 }
 
@@ -100,7 +100,7 @@ func (router *APIRouter) signUpEmailPassword(w http.ResponseWriter, req SignUpRe
 
 type SignInRequest struct {
 	Email       string `json:"email"`
-	PasswordHex string `json:"password"`
+	PasswordHex string `json:"password_hex"`
 }
 
 type SignInResponse struct {

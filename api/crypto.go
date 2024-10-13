@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"golang.org/x/crypto/pbkdf2"
 	"golang.org/x/crypto/sha3"
@@ -28,7 +29,7 @@ func GetUserIDFromEmail(email string) []byte {
 }
 
 func HashPassword(password string) []byte {
-	return pbkdf2.Key([]byte(password), SaltBytes(DMSaltPassword), PasswordHashIter, PasswordHashKeyLen, sha3.New256)
+	return pbkdf2.Key([]byte(password), SaltBytes(DMSaltPassword), PasswordHashIter, PasswordHashKeyLen, sha256.New)
 }
 
 func GenerateRandomSalt() ([]byte, error) {

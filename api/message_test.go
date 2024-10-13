@@ -15,8 +15,11 @@ func TestMessageCreationAndRetrieval(t *testing.T) {
 	user, err := createTestUser(t, ts, "user@example.com", "testuser", "password123")
 	require.NoError(t, err)
 
-	// Create a thread
-	thread, err := createTestThread(t, ts, user, "Test Thread")
+	// Create a space
+	space := createTestSpace(t, ts, user)
+
+	// Create a thread within the space
+	thread, err := createTestThread(t, ts, user, space, "Test Thread")
 	require.NoError(t, err)
 
 	// Create 10 messages in the thread
@@ -32,12 +35,13 @@ func TestMessageCreationAndRetrieval(t *testing.T) {
 	testCreateMessageWithParent(t, ts, user, thread, createdMessages[0])
 }
 
-func createTestThread(t *testing.T, ts *TestServer, user *SignUpResponse, title string) (*storage.Thread, error) {
+func createTestThread(t *testing.T, ts *TestServer, user *SignUpResponse, space *storage.Space, title string) (*storage.Thread, error) {
 	createThreadReq := CreateThreadRequest{
+		SpaceID:   space.ID,
 		Title:     title,
 		AuthToken: user.AuthToken,
 	}
-	createThreadResp, err := performRequest[CreateThreadRequest, CreateThreadResponse](t, ts, "POST", "/v0/create-thread", createThreadReq)
+	createThreadResp, err := performRequest[CreateThreadRequest, CreateThreadResponse](t, ts, "POST", "/api/v0/create-thread", createThreadReq)
 	require.NoError(t, err)
 	return &createThreadResp.Thread, nil
 }
@@ -51,7 +55,7 @@ func createTestMessages(t *testing.T, ts *TestServer, user *SignUpResponse, thre
 			Content:   "Test message",
 			AuthToken: user.AuthToken,
 		}
-		createMessageResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/v0/create-message", createMessageReq)
+		createMessageResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/api/v0/create-message", createMessageReq)
 		require.NoError(t, err)
 		require.NotNil(t, createMessageResp.Message)
 		messages = append(messages, createMessageResp.Message)
@@ -68,7 +72,7 @@ func testMessageRetrieval(t *testing.T, ts *TestServer, user *SignUpResponse, th
 		MaxTimestamp: uint64(time.Now().Add(time.Hour).UnixNano()), // Use a future timestamp to get all messages
 		AuthToken:    user.AuthToken,
 	}
-	getMessagesResp, err := performRequest[GetMessagesRequest, GetMessagesResponse](t, ts, "POST", "/v0/get-messages", getMessagesReq)
+	getMessagesResp, err := performRequest[GetMessagesRequest, GetMessagesResponse](t, ts, "POST", "/api/v0/get-messages", getMessagesReq)
 	require.NoError(t, err)
 	require.Len(t, getMessagesResp.Messages, len(createdMessages))
 
@@ -98,7 +102,7 @@ func testMessagePagination(t *testing.T, ts *TestServer, user *SignUpResponse, t
 			MaxTimestamp: maxTimestamp,
 			AuthToken:    user.AuthToken,
 		}
-		getMessagesResp, err := performRequest[GetMessagesRequest, GetMessagesResponse](t, ts, "POST", "/v0/get-messages", getMessagesReq)
+		getMessagesResp, err := performRequest[GetMessagesRequest, GetMessagesResponse](t, ts, "POST", "/api/v0/get-messages", getMessagesReq)
 		require.NoError(t, err)
 
 		if page < totalPages-1 {
@@ -128,6 +132,8 @@ func testMessagePagination(t *testing.T, ts *TestServer, user *SignUpResponse, t
 	for _, message := range allMessages {
 		require.False(t, messageMap[message.ID.String()], "Duplicate message found")
 		messageMap[message.ID.String()] = true
+		require.Len(t, message.Messages, 1)
+		require.Equal(t, "Test message", message.Messages[0])
 
 		if !lastTimestamp.IsZero() {
 			require.True(t, message.UpdatedAt.Before(lastTimestamp) || message.UpdatedAt.Equal(lastTimestamp), "Messages not in descending order")
@@ -147,11 +153,11 @@ func testCreateMessageWithParent(t *testing.T, ts *TestServer, user *SignUpRespo
 		Content:   "Reply to parent message",
 		AuthToken: user.AuthToken,
 	}
-	createMessageResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/v0/create-message", createMessageReq)
+	createMessageResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/api/v0/create-message", createMessageReq)
 	require.NoError(t, err)
 	require.NotNil(t, createMessageResp.Message)
 	require.Equal(t, parentMessage.ID, createMessageResp.Message.ParentID.ID)
-	require.Equal(t, 0, createMessageResp.Message.ParentID.MessageID)
+	require.Equal(t, uint64(0), createMessageResp.Message.ParentID.MessageID)
 
 	// Verify the message is retrieved with the parent information
 	getMessagesReq := GetMessagesRequest{
@@ -160,10 +166,10 @@ func testCreateMessageWithParent(t *testing.T, ts *TestServer, user *SignUpRespo
 		MaxTimestamp: uint64(time.Now().Add(time.Hour).UnixNano()),
 		AuthToken:    user.AuthToken,
 	}
-	getMessagesResp, err := performRequest[GetMessagesRequest, GetMessagesResponse](t, ts, "POST", "/v0/get-messages", getMessagesReq)
+	getMessagesResp, err := performRequest[GetMessagesRequest, GetMessagesResponse](t, ts, "POST", "/api/v0/get-messages", getMessagesReq)
 	require.NoError(t, err)
 	require.Len(t, getMessagesResp.Messages, 1)
 	require.Equal(t, createMessageResp.Message.ID, getMessagesResp.Messages[0].ID)
 	require.Equal(t, parentMessage.ID, getMessagesResp.Messages[0].ParentID.ID)
-	require.Equal(t, 0, getMessagesResp.Messages[0].ParentID.MessageID)
+	require.Equal(t, uint64(0), getMessagesResp.Messages[0].ParentID.MessageID)
 }

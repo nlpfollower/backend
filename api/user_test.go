@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/hex"
+	"github.com/nlpfollower/deltamind/backend/storage"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,7 @@ func TestSignUpAndSignIn(t *testing.T) {
 		Email:       "test@example.com",
 		PasswordHex: hex.EncodeToString(HashPassword("userPassword123")),
 	}
-	signInResp, err := performRequest[SignInRequest, SignInResponse](t, ts, "POST", "/v0/sign-in", signInReq)
+	signInResp, err := performRequest[SignInRequest, SignInResponse](t, ts, "POST", "/api/v0/sign-in", signInReq)
 	require.NoError(t, err)
 	require.NotEmpty(t, signInResp.AuthToken.SessionKey)
 
@@ -36,38 +37,39 @@ func TestSignUpAndSignIn(t *testing.T) {
 		Email:       "test@example.com",
 		PasswordHex: modifiedPasswordHex,
 	}
-	_, err = performRequest[SignInRequest, SignInResponse](t, ts, "POST", "/v0/sign-in", modifiedSignInReq)
+	_, err = performRequest[SignInRequest, SignInResponse](t, ts, "POST", "/api/v0/sign-in", modifiedSignInReq)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected status code: 401")
 
-	// Test CreateThread with valid AuthToken
-	createThreadReq := CreateThreadRequest{
-		Title:     "Test Thread",
-		AuthToken: signUpResp.AuthToken,
+	// Test CreateSpace with valid AuthToken to verify AuthToken functionality
+	createSpaceReq := CreateSpaceRequest{
+		Name:        "Test Space",
+		Description: "A test space",
+		AuthToken:   signUpResp.AuthToken,
 	}
-	createThreadResp, err := performRequest[CreateThreadRequest, CreateThreadResponse](t, ts, "POST", "/v0/create-thread", createThreadReq)
+	createSpaceResp, err := performRequest[CreateSpaceRequest, CreateSpaceResponse](t, ts, "POST", "/api/v0/create-space", createSpaceReq)
 	require.NoError(t, err)
-	require.NotEmpty(t, createThreadResp.Thread.ID)
-	require.NotEmpty(t, createThreadResp.Thread.UserID)
+	require.NotEmpty(t, createSpaceResp.Space.ID)
+	require.Equal(t, "Test Space", createSpaceResp.Space.Name)
 
-	// List threads and check if the newly created thread exists
-	getThreadsReq := GetThreadsRequest{
+	// Verify the space exists by listing spaces
+	getSpacesReq := GetSpacesRequest{
 		Limit:     10,
 		AuthToken: signUpResp.AuthToken,
 	}
-	getThreadsResp, err := performRequest[GetThreadsRequest, GetThreadsResponse](t, ts, "POST", "/v0/get-threads", getThreadsReq)
+	getSpacesResp, err := performRequest[GetSpacesRequest, GetSpacesResponse](t, ts, "POST", "/api/v0/get-spaces", getSpacesReq)
 	require.NoError(t, err)
-	require.NotEmpty(t, getThreadsResp.Threads)
+	require.NotEmpty(t, getSpacesResp.Spaces)
 
-	foundNewThread := false
-	for _, thread := range getThreadsResp.Threads {
-		if thread.ID == createThreadResp.Thread.ID {
-			foundNewThread = true
-			require.Equal(t, "Test Thread", thread.Title)
+	foundNewSpace := false
+	for _, space := range getSpacesResp.Spaces {
+		if space.ID == createSpaceResp.Space.ID {
+			foundNewSpace = true
+			require.Equal(t, "Test Space", space.Name)
 			break
 		}
 	}
-	require.True(t, foundNewThread, "Newly created thread not found in the list of threads")
+	require.True(t, foundNewSpace, "Newly created space not found in the list of spaces")
 }
 
 func createTestUser(t *testing.T, ts *TestServer, email, username, password string) (*SignUpResponse, error) {
@@ -78,10 +80,10 @@ func createTestUser(t *testing.T, ts *TestServer, email, username, password stri
 		Email:       email,
 		Username:    username,
 		PasswordHex: hexEncodedPassword,
-		Method:      AuthMethodEmailPassword,
+		Method:      storage.AuthMethodEmailPassword,
 	}
 
-	return performRequest[SignUpRequest, SignUpResponse](t, ts, "POST", "/v0/sign-up", signUpReq)
+	return performRequest[SignUpRequest, SignUpResponse](t, ts, "POST", "/api/v0/sign-up", signUpReq)
 }
 
 func modifyHexString(hexStr string) string {

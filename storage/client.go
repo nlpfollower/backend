@@ -19,20 +19,35 @@ const (
 	// DBUserPrefix is used to store user data
 	// <DBPrimaryContext><DBUserPrefix><UserID> -> <User>
 	DBPrimaryUserPrefix byte = 0x00
+	// DBSpacePrefix is used to store spaces data
+	// <DBPrimaryContext><DBSpacePrefix><SpaceID> -> <Space>
+	DBPrimarySpacePrefix byte = 0x01
 	// DBThreadPrefix is used to store thread data
 	// <DBPrimaryContext><DBThreadPrefix><ThreadID> -> <Thread>
-	DBPrimaryThreadPrefix byte = 0x01
+	DBPrimaryThreadPrefix byte = 0x02
 	// DBMessagePrefix is used to store message data
 	// <DBPrimaryContext><DBMessagePrefix><MessageID> -> <Message>
-	DBPrimaryMessagePrefix byte = 0x02
+	DBPrimaryMessagePrefix byte = 0x03
+	// DBModelPrefix is used to store model information data
+	// <DBPrimaryContext><DBModelPrefix><ModelID> -> <ModelInfo>
+	DBPrimaryModelPrefix byte = 0x04
 
 	// Prefixes for secondary indices
-	// DBSecondaryUserThreadTimestampPrefix is used to store user's threads by timestamp
-	// <DBSecondaryContext><DBSecondaryUserThreadTimestampPrefix><UserID><Timestamp> -> <Thread>
-	DBSecondaryUserThreadTimestampPrefix byte = 0x00
+	// DBSecondaryUserSpacePrefix is used to store user's spaces
+	// <DBSecondaryContext><DBSecondaryUserSpacePrefix><UserID><Timestamp> -> <Space>
+	DBSecondaryUserSpacePrefix byte = 0x00
+	// DBSecondarySpaceThreadPrefix is used to store space's threads
+	// <DBSecondaryContext><DBSecondarySpaceThreadPrefix><SpaceID><Timestamp> -> <Thread>
+	DBSecondarySpaceThreadPrefix byte = 0x01
 	// DBSecondaryThreadMessageTimestampPrefix is used to store thread's messages by timestamp
 	// <DBSecondaryContext><DBSecondaryThreadMessageTimestampPrefix><ThreadID><Timestamp> -> <CompositeMessage>
-	DBSecondaryThreadMessageTimestampPrefix byte = 0x01
+	DBSecondaryThreadMessageTimestampPrefix byte = 0x02
+	// DBSecondaryUserModelPrefix is used to store user's models
+	// <DBSecondaryContext><DBSecondaryUserModelPrefix><UserID><Timestamp> -> <ModelInfo>
+	DBSecondaryUserModelPrefix byte = 0x03
+	// DBSecondaryModelIterationPrefix is used to store model's iterations
+	// <DBSecondaryContext><DBSecondaryModelIterationPrefix><ModelID><Index> -> <ModelIteration>
+	DBSecondaryModelIterationPrefix byte = 0x04
 )
 
 type DatabaseClient struct {
@@ -61,6 +76,11 @@ func (client *DatabaseClient) getKeyForPrimaryUser(userID []byte) (db.Context, [
 	return ctx, userID
 }
 
+func (client *DatabaseClient) getKeyForPrimarySpace(spaceID []byte) (db.Context, []byte) {
+	ctx := client.GetContext([]byte{DBPrimaryContext, DBPrimarySpacePrefix})
+	return ctx, spaceID
+}
+
 func (client *DatabaseClient) getKeyForPrimaryThread(threadID []byte) (db.Context, []byte) {
 	ctx := client.GetContext([]byte{DBPrimaryContext, DBPrimaryThreadPrefix})
 	return ctx, threadID
@@ -71,10 +91,22 @@ func (client *DatabaseClient) getKeyForPrimaryMessage(messageID []byte) (db.Cont
 	return ctx, messageID
 }
 
-func (client *DatabaseClient) getKeyForSecondaryUserThreadTimestamp(userID []byte, timestamp time.Time) (db.Context, []byte) {
-	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryUserThreadTimestampPrefix})
+func (client *DatabaseClient) getKeyForPrimaryModel(modelID []byte) (db.Context, []byte) {
+	ctx := client.GetContext([]byte{DBPrimaryContext, DBPrimaryModelPrefix})
+	return ctx, modelID
+}
+
+func (client *DatabaseClient) getKeyForSecondaryUserSpace(userID []byte, timestamp time.Time) (db.Context, []byte) {
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryUserSpacePrefix})
 	ts := NewTimestamp(timestamp)
 	key := append(userID, ts[:]...)
+	return ctx, key
+}
+
+func (client *DatabaseClient) getKeyForSecondarySpaceThread(spaceID []byte, timestamp time.Time) (db.Context, []byte) {
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondarySpaceThreadPrefix})
+	ts := NewTimestamp(timestamp)
+	key := append(spaceID, ts[:]...)
 	return ctx, key
 }
 
@@ -82,6 +114,21 @@ func (client *DatabaseClient) getKeyForSecondaryThreadMessageTimestamp(threadID 
 	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryThreadMessageTimestampPrefix})
 	ts := NewTimestamp(timestamp)
 	key := append(threadID, ts[:]...)
+	return ctx, key
+}
+
+func (client *DatabaseClient) getKeyForSecondaryUserModel(userID []byte, timestamp time.Time) (db.Context, []byte) {
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryUserModelPrefix})
+	ts := NewTimestamp(timestamp)
+	key := append(userID, ts[:]...)
+	return ctx, key
+}
+
+func (client *DatabaseClient) getKeyForSecondaryModelIteration(modelID []byte, index uint64) (db.Context, []byte) {
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryModelIterationPrefix})
+	indexBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(indexBytes, index)
+	key := append(modelID, indexBytes...)
 	return ctx, key
 }
 
@@ -118,6 +165,41 @@ func (client *DatabaseClient) GetUser(txn db.Transaction, userID Digest) (*User,
 		return nil, errors.Wrap(err, "GetUser: failed to unmarshal user")
 	}
 	return &user, nil
+}
+
+// ==========================
+// Primary Space operations
+// ==========================
+func (client *DatabaseClient) SetSpace(txn db.Transaction, space *Space) error {
+	ctx, key := client.getKeyForPrimarySpace(space.ID.Bytes())
+	spaceBytes, err := json.Marshal(space)
+	if err != nil {
+		return errors.Wrap(err, "SetSpace: failed to marshal space")
+	}
+	return txn.Set(key, spaceBytes, ctx)
+}
+
+func (client *DatabaseClient) DeleteSpace(txn db.Transaction, spaceID Digest) error {
+	ctx, key := client.getKeyForPrimarySpace(spaceID.Bytes())
+	return txn.Delete(key, ctx)
+}
+
+func (client *DatabaseClient) GetSpace(txn db.Transaction, spaceID Digest) (*Space, error) {
+	ctx, key := client.getKeyForPrimarySpace(spaceID.Bytes())
+	spaceBytes, err := txn.Get(key, ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetSpace: failed to get space")
+	}
+	if spaceBytes == nil {
+		return nil, nil
+	}
+
+	var space Space
+	err = json.Unmarshal(spaceBytes, &space)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetSpace: failed to unmarshal space")
+	}
+	return &space, nil
 }
 
 // ==========================
@@ -183,28 +265,118 @@ func (client *DatabaseClient) GetMessage(txn db.Transaction, messageID Digest) (
 }
 
 // ==========================
-// Secondary User Thread operations
+// Primary Model operations
 // ==========================
-func (client *DatabaseClient) SetUserThread(txn db.Transaction, userID Digest, timestamp time.Time, thread *Thread) error {
-	ctx, key := client.getKeyForSecondaryUserThreadTimestamp(userID.Bytes(), timestamp)
+func (client *DatabaseClient) SetModel(txn db.Transaction, model *ModelInfo) error {
+	ctx, key := client.getKeyForPrimaryModel(model.ID.Bytes())
+	modelBytes, err := json.Marshal(model)
+	if err != nil {
+		return errors.Wrap(err, "SetModel: failed to marshal model")
+	}
+	return txn.Set(key, modelBytes, ctx)
+}
+
+func (client *DatabaseClient) DeleteModel(txn db.Transaction, modelID Digest) error {
+	ctx, key := client.getKeyForPrimaryModel(modelID.Bytes())
+	return txn.Delete(key, ctx)
+}
+
+func (client *DatabaseClient) GetModel(txn db.Transaction, modelID Digest) (*ModelInfo, error) {
+	ctx, key := client.getKeyForPrimaryModel(modelID.Bytes())
+	modelBytes, err := txn.Get(key, ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetModel: failed to get model")
+	}
+	if modelBytes == nil {
+		return nil, nil
+	}
+
+	var model ModelInfo
+	err = json.Unmarshal(modelBytes, &model)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetModel: failed to unmarshal model")
+	}
+	return &model, nil
+}
+
+// ==========================
+// Secondary User Space operations
+// ==========================
+func (client *DatabaseClient) SetUserSpace(txn db.Transaction, userID Digest, timestamp time.Time, space *Space) error {
+	ctx, key := client.getKeyForSecondaryUserSpace(userID.Bytes(), timestamp)
+	spaceBytes, err := json.Marshal(space)
+	if err != nil {
+		return errors.Wrap(err, "SetUserSpace: failed to marshal space")
+	}
+	return txn.Set(key, spaceBytes, ctx)
+}
+
+func (client *DatabaseClient) DeleteUserSpace(txn db.Transaction, userID Digest, timestamp time.Time) error {
+	ctx, key := client.getKeyForSecondaryUserSpace(userID.Bytes(), timestamp)
+	return txn.Delete(key, ctx)
+}
+
+func (client *DatabaseClient) GetUserSpacesReverse(txn db.Transaction, userID []byte, maxTimestamp uint64, limit int) ([]*Space, error) {
+	var spaces []*Space
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryUserSpacePrefix})
+	it, err := txn.GetIterator(userID, ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetUserSpacesReverse: failed to get iterator")
+	}
+	defer it.Close()
+
+	ts := NewTimestampFromUint64(maxTimestamp)
+
+	if !it.Seek(ts[:]) {
+		if !it.Last() {
+			return spaces, nil
+		}
+	} else {
+		if !it.Prev() {
+			return spaces, nil
+		}
+	}
+
+	for i := 0; i < limit && it.Valid(); i++ {
+		spaceBytes, err := it.Value()
+		if err != nil {
+			return nil, errors.Wrap(err, "GetUserSpacesReverse: failed to get space")
+		}
+		var space Space
+		if err := json.Unmarshal(spaceBytes, &space); err != nil {
+			return nil, errors.Wrap(err, "GetUserSpacesReverse: failed to unmarshal space")
+		}
+		spaces = append(spaces, &space)
+		if !it.Prev() {
+			break
+		}
+	}
+	return spaces, nil
+}
+
+// ==========================
+// Secondary Space Thread operations
+// ==========================
+func (client *DatabaseClient) SetSpaceThread(txn db.Transaction, spaceID Digest, timestamp time.Time, thread *Thread) error {
+	ctx, key := client.getKeyForSecondarySpaceThread(spaceID.Bytes(), timestamp)
 	threadBytes, err := json.Marshal(thread)
 	if err != nil {
-		return errors.Wrap(err, "SetUserThread: failed to marshal thread")
+		return errors.Wrap(err, "SetSpaceThread: failed to marshal thread")
 	}
 	return txn.Set(key, threadBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteUserThread(txn db.Transaction, userID Digest, timestamp time.Time) error {
-	ctx, key := client.getKeyForSecondaryUserThreadTimestamp(userID.Bytes(), timestamp)
+func (client *DatabaseClient) DeleteSpaceThread(txn db.Transaction, spaceID Digest, timestamp time.Time) error {
+	ctx, key := client.getKeyForSecondarySpaceThread(spaceID.Bytes(), timestamp)
 	return txn.Delete(key, ctx)
 }
 
-func (client *DatabaseClient) GetUserThreadsReverse(txn db.Transaction, userID []byte, maxTimestamp uint64, limit int) ([]*Thread, error) {
+func (client *DatabaseClient) GetSpaceThreadsReverse(txn db.Transaction, spaceID []byte, maxTimestamp uint64, limit int) ([]*Thread, error) {
 	var threads []*Thread
-	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryUserThreadTimestampPrefix})
-	it, err := txn.GetIterator(userID, ctx)
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondarySpaceThreadPrefix})
+	it, err := txn.GetIterator(spaceID, ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "GetUserThreadsReverse: failed to get iterator")
+		return nil, errors.Wrap(err, "GetSpaceThreadsReverse: failed to get iterator")
 	}
 	defer it.Close()
 
@@ -215,7 +387,6 @@ func (client *DatabaseClient) GetUserThreadsReverse(txn db.Transaction, userID [
 			return threads, nil
 		}
 	} else {
-		// Prev so we don't include maxTimestamp.
 		if !it.Prev() {
 			return threads, nil
 		}
@@ -224,11 +395,11 @@ func (client *DatabaseClient) GetUserThreadsReverse(txn db.Transaction, userID [
 	for i := 0; i < limit && it.Valid(); i++ {
 		threadBytes, err := it.Value()
 		if err != nil {
-			return nil, errors.Wrap(err, "GetUserThreadsReverse: failed to get thread")
+			return nil, errors.Wrap(err, "GetSpaceThreadsReverse: failed to get thread")
 		}
 		var thread Thread
 		if err := json.Unmarshal(threadBytes, &thread); err != nil {
-			return nil, errors.Wrap(err, "GetUserThreadsReverse: failed to unmarshal thread")
+			return nil, errors.Wrap(err, "GetSpaceThreadsReverse: failed to unmarshal thread")
 		}
 		threads = append(threads, &thread)
 		if !it.Prev() {
@@ -241,7 +412,6 @@ func (client *DatabaseClient) GetUserThreadsReverse(txn db.Transaction, userID [
 // ==========================
 // Secondary Thread Messages operations
 // ==========================
-
 func (client *DatabaseClient) SetThreadMessage(txn db.Transaction, threadID Digest, timestamp time.Time, message *CompoundMessage) error {
 	ctx, key := client.getKeyForSecondaryThreadMessageTimestamp(threadID.Bytes(), timestamp)
 	messageBytes, err := json.Marshal(message)
@@ -269,11 +439,11 @@ func (client *DatabaseClient) GetThreadMessagesReverse(txn db.Transaction, threa
 
 	if !it.Seek(ts[:]) {
 		if !it.Last() {
-			return messages, nil // No matching keys
+			return messages, nil
 		}
 	} else {
 		if !it.Prev() {
-			return messages, nil // No matching keys
+			return messages, nil
 		}
 	}
 
@@ -292,6 +462,117 @@ func (client *DatabaseClient) GetThreadMessagesReverse(txn db.Transaction, threa
 		}
 	}
 	return messages, nil
+}
+
+// ==========================
+// Secondary User Model operations
+// ==========================
+func (client *DatabaseClient) SetUserModel(txn db.Transaction, userID Digest, timestamp time.Time, model *ModelInfo) error {
+	ctx, key := client.getKeyForSecondaryUserModel(userID.Bytes(), timestamp)
+	modelBytes, err := json.Marshal(model)
+	if err != nil {
+		return errors.Wrap(err, "SetUserModel: failed to marshal model")
+	}
+	return txn.Set(key, modelBytes, ctx)
+}
+
+func (client *DatabaseClient) DeleteUserModel(txn db.Transaction, userID Digest, timestamp time.Time) error {
+	ctx, key := client.getKeyForSecondaryUserModel(userID.Bytes(), timestamp)
+	return txn.Delete(key, ctx)
+}
+
+func (client *DatabaseClient) GetUserModelsReverse(txn db.Transaction, userID []byte, maxTimestamp uint64, limit int) ([]*ModelInfo, error) {
+	var models []*ModelInfo
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryUserModelPrefix})
+	it, err := txn.GetIterator(userID, ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetUserModelsReverse: failed to get iterator")
+	}
+	defer it.Close()
+
+	ts := NewTimestampFromUint64(maxTimestamp)
+
+	if !it.Seek(ts[:]) {
+		if !it.Last() {
+			return models, nil
+		}
+	} else {
+		if !it.Prev() {
+			return models, nil
+		}
+	}
+
+	for i := 0; i < limit && it.Valid(); i++ {
+		modelBytes, err := it.Value()
+		if err != nil {
+			return nil, errors.Wrap(err, "GetUserModelsReverse: failed to get model")
+		}
+		var model ModelInfo
+		if err := json.Unmarshal(modelBytes, &model); err != nil {
+			return nil, errors.Wrap(err, "GetUserModelsReverse: failed to unmarshal model")
+		}
+		models = append(models, &model)
+		if !it.Prev() {
+			break
+		}
+	}
+	return models, nil
+}
+
+// ==========================
+// Secondary Model Iteration operations
+// ==========================
+func (client *DatabaseClient) SetModelIteration(txn db.Transaction, modelID Digest, index uint64, iteration *ModelIteration) error {
+	ctx, key := client.getKeyForSecondaryModelIteration(modelID.Bytes(), index)
+	iterationBytes, err := json.Marshal(iteration)
+	if err != nil {
+		return errors.Wrap(err, "SetModelIteration: failed to marshal iteration")
+	}
+	return txn.Set(key, iterationBytes, ctx)
+}
+
+func (client *DatabaseClient) DeleteModelIteration(txn db.Transaction, modelID Digest, index uint64) error {
+	ctx, key := client.getKeyForSecondaryModelIteration(modelID.Bytes(), index)
+	return txn.Delete(key, ctx)
+}
+
+func (client *DatabaseClient) GetModelIterationsReverse(txn db.Transaction, modelID []byte, maxIndex, limit uint64) ([]*ModelIteration, error) {
+	var iterations []*ModelIteration
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryModelIterationPrefix})
+	it, err := txn.GetIterator(modelID, ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetModelIterationsReverse: failed to get iterator")
+	}
+	defer it.Close()
+
+	indexBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(indexBytes, maxIndex)
+
+	if !it.Seek(indexBytes) {
+		if !it.Last() {
+			return iterations, nil
+		}
+	} else {
+		if !it.Prev() {
+			return iterations, nil
+		}
+	}
+
+	for i := uint64(0); i < limit && it.Valid(); i++ {
+		iterationBytes, err := it.Value()
+		if err != nil {
+			return nil, errors.Wrap(err, "GetModelIterationsReverse: failed to get iteration")
+		}
+		var iteration ModelIteration
+		if err := json.Unmarshal(iterationBytes, &iteration); err != nil {
+			return nil, errors.Wrap(err, "GetModelIterationsReverse: failed to unmarshal iteration")
+		}
+		iterations = append(iterations, &iteration)
+		if !it.Prev() {
+			break
+		}
+	}
+	return iterations, nil
 }
 
 func makeTimeKey(timestamp time.Time) []byte {

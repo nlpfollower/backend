@@ -76,20 +76,26 @@ func importThread(dbPath, email, jsonFile string) error {
 			return fmt.Errorf("error creating thread: %v", err)
 		}
 
-		// Create messages
-		messageIDBytes, err := api.GenerateRandomBytes(32)
-		if err != nil {
-			return fmt.Errorf("error generating message ID: %v", err)
-		}
-
+		var parentID *storage.CompoundMessageID
 		for _, chat := range threadData.Chats {
+			// Create messages
+			messageIDBytes, err := api.GenerateRandomBytes(32)
+			if err != nil {
+				return fmt.Errorf("error generating message ID: %v", err)
+			}
+
 			message := &storage.CompoundMessage{
 				ID:        storage.NewDigest(messageIDBytes),
+				ParentID:  parentID,
 				ThreadID:  newThread.ID,
 				Author:    chat.Role,
 				Messages:  []string{chat.Message},
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
+			}
+			parentID = &storage.CompoundMessageID{
+				ID:        message.ID,
+				MessageID: 0,
 			}
 
 			if err := dbManager.CreateMessage(newThread.ID, message); err != nil {

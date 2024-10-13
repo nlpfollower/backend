@@ -9,8 +9,9 @@ import (
 )
 
 type CreateThreadRequest struct {
-	Title     string    `json:"title"`
-	AuthToken AuthToken `json:"auth_token"`
+	SpaceID   storage.Digest `json:"space_id"`
+	Title     string         `json:"title"`
+	AuthToken AuthToken      `json:"auth_token"`
 }
 
 type CreateThreadResponse struct {
@@ -31,19 +32,25 @@ func (router *APIRouter) CreateThread(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Verify the user exists and matches the token
+	// Get the user ID from the claims
 	userID, err := storage.DigestFromString(claims.UserID)
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
-	user, err := router.dbManager.GetUser(userID)
+
+	// Verify the space exists and belongs to the user
+	space, err := router.dbManager.GetSpace(createReq.SpaceID)
 	if err != nil {
-		http.Error(w, "Failed to verify user", http.StatusInternalServerError)
+		http.Error(w, errors.Wrap(err, "Failed to get space").Error(), http.StatusInternalServerError)
 		return
 	}
-	if user == nil {
-		http.Error(w, "User not found", http.StatusUnauthorized)
+	if space == nil {
+		http.Error(w, "Space not found", http.StatusNotFound)
+		return
+	}
+	if space.UserID != userID {
+		http.Error(w, "User does not have permission to create threads in this space", http.StatusForbidden)
 		return
 	}
 
@@ -57,13 +64,13 @@ func (router *APIRouter) CreateThread(w http.ResponseWriter, req *http.Request) 
 	timeNow := time.Now()
 	thread := storage.Thread{
 		ID:        storage.NewDigest(threadIDBytes),
-		UserID:    userID,
+		SpaceID:   createReq.SpaceID,
 		Title:     createReq.Title,
 		CreatedAt: timeNow,
 		UpdatedAt: timeNow,
 	}
 
-	if err := router.dbManager.CreateThread(user.ID, &thread); err != nil {
+	if err := router.dbManager.CreateThread(createReq.SpaceID, &thread); err != nil {
 		http.Error(w, errors.Wrap(err, "Failed to create thread").Error(), http.StatusInternalServerError)
 		return
 	}
@@ -73,9 +80,10 @@ func (router *APIRouter) CreateThread(w http.ResponseWriter, req *http.Request) 
 }
 
 type GetThreadsRequest struct {
-	Limit        int       `json:"limit"`
-	MaxTimestamp uint64    `json:"max_timestamp"`
-	AuthToken    AuthToken `json:"auth_token"`
+	SpaceID      storage.Digest `json:"space_id"`
+	Limit        int            `json:"limit"`
+	MaxTimestamp uint64         `json:"max_timestamp"`
+	AuthToken    AuthToken      `json:"auth_token"`
 }
 
 type GetThreadsResponse struct {
@@ -104,6 +112,21 @@ func (router *APIRouter) GetThreads(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Verify the space exists and belongs to the user
+	space, err := router.dbManager.GetSpace(getReq.SpaceID)
+	if err != nil {
+		http.Error(w, errors.Wrap(err, "Failed to get space").Error(), http.StatusInternalServerError)
+		return
+	}
+	if space == nil {
+		http.Error(w, "Space not found", http.StatusNotFound)
+		return
+	}
+	if space.UserID != userID {
+		http.Error(w, "User does not have permission to view threads in this space", http.StatusForbidden)
+		return
+	}
+
 	if getReq.Limit == 0 {
 		getReq.Limit = 10 // Default limit
 	}
@@ -112,7 +135,7 @@ func (router *APIRouter) GetThreads(w http.ResponseWriter, req *http.Request) {
 		getReq.MaxTimestamp = uint64(time.Now().UnixNano())
 	}
 
-	threads, err := router.dbManager.GetUserThreads(userID, getReq.Limit, getReq.MaxTimestamp)
+	threads, err := router.dbManager.GetSpaceThreads(getReq.SpaceID, getReq.Limit, getReq.MaxTimestamp)
 	if err != nil {
 		http.Error(w, errors.Wrap(err, "Failed to get threads").Error(), http.StatusInternalServerError)
 		return

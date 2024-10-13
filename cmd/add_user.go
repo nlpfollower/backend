@@ -62,7 +62,7 @@ func addUser(dbPath, email, username, password string) error {
 		return fmt.Errorf("error marshaling sign-up request: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", "/v0/sign-up", bytes.NewBuffer(reqBody))
+	req, err := http.NewRequest("POST", "/api/v0/sign-up", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}

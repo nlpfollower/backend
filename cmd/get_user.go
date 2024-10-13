@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/hex"
 	"fmt"
 	"github.com/nlpfollower/deltamind/backend/api"
 	"github.com/nlpfollower/deltamind/backend/storage"
@@ -50,7 +51,7 @@ func getUser(dbPath, email string) error {
 	fmt.Printf("ID: %s\n", user.ID)
 	fmt.Printf("Email: %s\n", user.Email)
 	fmt.Printf("Username: %s\n", user.Username)
-	fmt.Printf("Password (hash): %s\n", user.PasswordHash)
+	fmt.Printf("Password (hash): %s\n", hex.EncodeToString(user.PasswordHash))
 	fmt.Printf("Created At: %s\n", user.CreatedAt)
 
 	return nil

@@ -19,55 +19,74 @@ func TestThreadCreationAndRetrieval(t *testing.T) {
 	user2, err := createTestUser(t, ts, "user2@example.com", "user2", "password2")
 	require.NoError(t, err)
 
-	// Create 15 threads for each user
-	createTestThreads(t, ts, user1, 15)
-	createTestThreads(t, ts, user2, 15)
+	// Create a space for each user
+	space1 := createTestSpace(t, ts, user1)
+	space2 := createTestSpace(t, ts, user2)
 
-	// Test thread retrieval for user1
-	testThreadRetrieval(t, ts, user1, 15)
+	// Create 15 threads for each user's space
+	createTestThreads(t, ts, user1, space1, 15)
+	createTestThreads(t, ts, user2, space2, 15)
 
-	// Test thread retrieval for user2
-	testThreadRetrieval(t, ts, user2, 15)
+	// Test thread retrieval for user1's space
+	testThreadRetrieval(t, ts, user1, space1, 15)
 
-	// Test pagination for user1
-	testThreadPagination(t, ts, user1)
+	// Test thread retrieval for user2's space
+	testThreadRetrieval(t, ts, user2, space2, 15)
 
-	// Test pagination for user2
-	testThreadPagination(t, ts, user2)
+	// Test pagination for user1's space
+	testThreadPagination(t, ts, user1, space1)
+
+	// Test pagination for user2's space
+	testThreadPagination(t, ts, user2, space2)
 }
 
-func createTestThreads(t *testing.T, ts *TestServer, user *SignUpResponse, count int) {
+func createTestSpace(t *testing.T, ts *TestServer, user *SignUpResponse) *storage.Space {
+	createSpaceReq := CreateSpaceRequest{
+		Name:        "Test Space",
+		Description: "A test space for threads",
+		AuthToken:   user.AuthToken,
+	}
+	createSpaceResp, err := performRequest[CreateSpaceRequest, CreateSpaceResponse](t, ts, "POST", "/api/v0/create-space", createSpaceReq)
+	require.NoError(t, err)
+	require.NotEmpty(t, createSpaceResp.Space.ID)
+	return &createSpaceResp.Space
+}
+
+func createTestThreads(t *testing.T, ts *TestServer, user *SignUpResponse, space *storage.Space, count int) {
 	for i := 0; i < count; i++ {
 		createThreadReq := CreateThreadRequest{
+			SpaceID:   space.ID,
 			Title:     fmt.Sprintf("Test Thread %d", i+1),
 			AuthToken: user.AuthToken,
 		}
-		createThreadResp, err := performRequest[CreateThreadRequest, CreateThreadResponse](t, ts, "POST", "/v0/create-thread", createThreadReq)
+		createThreadResp, err := performRequest[CreateThreadRequest, CreateThreadResponse](t, ts, "POST", "/api/v0/create-thread", createThreadReq)
 		require.NoError(t, err)
 		require.NotEmpty(t, createThreadResp.Thread.ID)
-		require.NotEmpty(t, createThreadResp.Thread.UserID)
+		require.Equal(t, space.ID, createThreadResp.Thread.SpaceID)
 		// Add a small delay to ensure unique timestamps
 		time.Sleep(time.Millisecond)
 	}
 }
 
-func testThreadRetrieval(t *testing.T, ts *TestServer, user *SignUpResponse, expectedCount int) {
+func testThreadRetrieval(t *testing.T, ts *TestServer, user *SignUpResponse, space *storage.Space, expectedCount int) {
 	getThreadsReq := GetThreadsRequest{
+		SpaceID:      space.ID,
 		Limit:        expectedCount,
 		MaxTimestamp: uint64(time.Now().UnixNano()),
 		AuthToken:    user.AuthToken,
 	}
-	getThreadsResp, err := performRequest[GetThreadsRequest, GetThreadsResponse](t, ts, "POST", "/v0/get-threads", getThreadsReq)
+	getThreadsResp, err := performRequest[GetThreadsRequest, GetThreadsResponse](t, ts, "POST", "/api/v0/get-threads", getThreadsReq)
 	require.NoError(t, err)
 	require.Len(t, getThreadsResp.Threads, expectedCount)
 
-	// Verify that all threads belong to the user
+	// Verify that all threads belong to the space
 	for _, thread := range getThreadsResp.Threads {
+		require.Equal(t, space.ID, thread.SpaceID)
 		require.Contains(t, thread.Title, "Test Thread")
 	}
 }
 
-func testThreadPagination(t *testing.T, ts *TestServer, user *SignUpResponse) {
+func testThreadPagination(t *testing.T, ts *TestServer, user *SignUpResponse, space *storage.Space) {
 	pageSize := 5
 	totalPages := 3
 
@@ -76,11 +95,12 @@ func testThreadPagination(t *testing.T, ts *TestServer, user *SignUpResponse) {
 
 	for page := 0; page < totalPages; page++ {
 		getThreadsReq := GetThreadsRequest{
+			SpaceID:      space.ID,
 			Limit:        pageSize,
 			MaxTimestamp: maxTimestamp,
 			AuthToken:    user.AuthToken,
 		}
-		getThreadsResp, err := performRequest[GetThreadsRequest, GetThreadsResponse](t, ts, "POST", "/v0/get-threads", getThreadsReq)
+		getThreadsResp, err := performRequest[GetThreadsRequest, GetThreadsResponse](t, ts, "POST", "/api/v0/get-threads", getThreadsReq)
 		require.NoError(t, err)
 
 		if page < totalPages-1 {
