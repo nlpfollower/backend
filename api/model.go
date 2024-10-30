@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"github.com/nlpfollower/deltamind/backend/storage"
+	"github.com/nlpfollower/deltamind/database/db"
 	"github.com/pkg/errors"
 	"math"
 	"net/http"
@@ -25,37 +26,43 @@ func (router *APIRouter) CreateModel(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Validate the AuthToken
 	claims, err := ValidateSessionKey(createReq.AuthToken.SessionKey)
 	if err != nil {
 		http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 		return
 	}
 
-	// Get the user ID from the claims
-	userID, err := storage.DigestFromString(claims.UserID)
+	userID, err := db.DigestFromString(claims.UserID)
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
-	// Generate a random model ID
 	modelIDBytes, err := GenerateRandomBytes(32)
 	if err != nil {
 		http.Error(w, "Failed to generate model ID", http.StatusInternalServerError)
 		return
 	}
 
-	timeNow := time.Now()
-	model := storage.ModelInfo{
-		ID:        storage.NewDigest(modelIDBytes),
-		UserID:    userID,
-		Name:      createReq.Name,
-		CreatedAt: timeNow,
-		UpdatedAt: timeNow,
-	}
+	var model storage.ModelInfo
+	err = router.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		timeNow := time.Now()
+		model = storage.ModelInfo{
+			ID:        db.NewDigest(modelIDBytes),
+			UserID:    userID,
+			Name:      createReq.Name,
+			CreatedAt: timeNow,
+			UpdatedAt: timeNow,
+		}
 
-	if err := router.dbManager.CreateModel(userID, &model); err != nil {
+		if err := txn.SetModel(userID, &model); err != nil {
+			return errors.Wrap(err, "Failed to create model")
+		}
+
+		return nil
+	})
+
+	if err != nil {
 		http.Error(w, errors.Wrap(err, "Failed to create model").Error(), http.StatusInternalServerError)
 		return
 	}
@@ -82,47 +89,53 @@ func (router *APIRouter) GetModels(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Validate the AuthToken
 	claims, err := ValidateSessionKey(getReq.AuthToken.SessionKey)
 	if err != nil {
 		http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 		return
 	}
 
-	// Get the user ID from the claims
-	userID, err := storage.DigestFromString(claims.UserID)
+	userID, err := db.DigestFromString(claims.UserID)
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
-	if getReq.Limit == 0 {
-		getReq.Limit = 10 // Default limit
-	}
+	var response GetModelsResponse
+	err = router.dbManager.View(func(txn *storage.DatabaseTransaction) error {
+		if getReq.Limit == 0 {
+			getReq.Limit = 10
+		}
 
-	if getReq.MaxTimestamp == 0 {
-		getReq.MaxTimestamp = uint64(time.Now().UnixNano())
-	}
+		if getReq.MaxTimestamp == 0 {
+			getReq.MaxTimestamp = uint64(time.Now().UnixNano())
+		}
 
-	models, err := router.dbManager.GetUserModels(userID, getReq.Limit, getReq.MaxTimestamp)
+		models, err := txn.GetUserModels(userID, getReq.Limit, getReq.MaxTimestamp)
+		if err != nil {
+			return errors.Wrap(err, "Failed to get models")
+		}
+
+		response.Models = models
+		if len(models) > 0 {
+			lastModelTime := uint64(models[len(models)-1].UpdatedAt.UnixNano())
+			response.NextMaxTimestamp = &lastModelTime
+		}
+
+		return nil
+	})
+
 	if err != nil {
 		http.Error(w, errors.Wrap(err, "Failed to get models").Error(), http.StatusInternalServerError)
 		return
-	}
-
-	response := GetModelsResponse{Models: models}
-
-	if len(models) > 0 {
-		lastModelTime := uint64(models[len(models)-1].UpdatedAt.UnixNano())
-		response.NextMaxTimestamp = &lastModelTime
 	}
 
 	json.NewEncoder(w).Encode(response)
 }
 
 type DeleteModelRequest struct {
-	ModelID   storage.Digest `json:"model_id"`
-	AuthToken AuthToken      `json:"auth_token"`
+	ModelID   db.Digest `json:"model_id"`
+	AuthToken AuthToken `json:"auth_token"`
 }
 
 type DeleteModelResponse struct {
@@ -136,37 +149,46 @@ func (router *APIRouter) DeleteModel(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Validate the AuthToken
 	claims, err := ValidateSessionKey(deleteReq.AuthToken.SessionKey)
 	if err != nil {
 		http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 		return
 	}
 
-	// Get the user ID from the claims
-	userID, err := storage.DigestFromString(claims.UserID)
+	userID, err := db.DigestFromString(claims.UserID)
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
-	// Get the model to ensure it belongs to the user
-	model, err := router.dbManager.GetModel(deleteReq.ModelID)
-	if err != nil {
-		http.Error(w, errors.Wrap(err, "Failed to get model").Error(), http.StatusInternalServerError)
-		return
-	}
-	if model == nil {
-		http.Error(w, "Model not found", http.StatusNotFound)
-		return
-	}
-	if model.UserID != userID {
-		http.Error(w, "User does not have permission to delete this model", http.StatusForbidden)
-		return
-	}
+	err = router.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		model, err := txn.GetModel(deleteReq.ModelID)
+		if err != nil {
+			return errors.Wrap(err, "Failed to get model")
+		}
+		if model == nil {
+			return errors.New("Model not found")
+		}
+		if model.UserID != userID {
+			return errors.New("User does not have permission to delete this model")
+		}
 
-	if err := router.dbManager.DeleteModel(deleteReq.ModelID); err != nil {
-		http.Error(w, errors.Wrap(err, "Failed to delete model").Error(), http.StatusInternalServerError)
+		if err := txn.DeleteModel(deleteReq.ModelID); err != nil {
+			return errors.Wrap(err, "Failed to delete model")
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case err.Error() == "Model not found":
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case err.Error() == "User does not have permission to delete this model":
+			http.Error(w, err.Error(), http.StatusForbidden)
+		default:
+			http.Error(w, errors.Wrap(err, "Failed to delete model").Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -175,9 +197,9 @@ func (router *APIRouter) DeleteModel(w http.ResponseWriter, req *http.Request) {
 }
 
 type CreateModelIterationRequest struct {
-	ModelID     storage.Digest `json:"model_id"`
-	Description string         `json:"description"`
-	AuthToken   AuthToken      `json:"auth_token"`
+	ModelID     db.Digest `json:"model_id"`
+	Description string    `json:"description"`
+	AuthToken   AuthToken `json:"auth_token"`
 }
 
 type CreateModelIterationResponse struct {
@@ -191,64 +213,72 @@ func (router *APIRouter) CreateModelIteration(w http.ResponseWriter, req *http.R
 		return
 	}
 
-	// Validate the AuthToken
 	claims, err := ValidateSessionKey(createReq.AuthToken.SessionKey)
 	if err != nil {
 		http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 		return
 	}
 
-	// Get the user ID from the claims
-	userID, err := storage.DigestFromString(claims.UserID)
+	userID, err := db.DigestFromString(claims.UserID)
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
-	// Get the model to ensure it belongs to the user
-	model, err := router.dbManager.GetModel(createReq.ModelID)
-	if err != nil {
-		http.Error(w, errors.Wrap(err, "Failed to get model").Error(), http.StatusInternalServerError)
-		return
-	}
-	if model == nil {
-		http.Error(w, "Model not found", http.StatusNotFound)
-		return
-	}
-	if model.UserID != userID {
-		http.Error(w, "User does not have permission to create iterations for this model", http.StatusForbidden)
-		return
-	}
-
-	// Generate a random iteration ID
 	iterationIDBytes, err := GenerateRandomBytes(32)
 	if err != nil {
 		http.Error(w, "Failed to generate iteration ID", http.StatusInternalServerError)
 		return
 	}
 
-	// Get the current iterations to determine the next index
-	currentIterations, err := router.dbManager.GetModelIterations(createReq.ModelID, math.MaxUint64, 1)
+	var iteration storage.ModelIteration
+	err = router.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		model, err := txn.GetModel(createReq.ModelID)
+		if err != nil {
+			return errors.Wrap(err, "Failed to get model")
+		}
+		if model == nil {
+			return errors.New("Model not found")
+		}
+		if model.UserID != userID {
+			return errors.New("User does not have permission to create iterations for this model")
+		}
+
+		// Get the current iterations to determine the next index
+		currentIterations, err := txn.GetModelIterations(createReq.ModelID, math.MaxUint64, 1)
+		if err != nil {
+			return errors.Wrap(err, "Failed to get current iterations")
+		}
+
+		var nextIndex uint64
+		if len(currentIterations) > 0 {
+			nextIndex = currentIterations[0].Index + 1
+		}
+
+		iteration = storage.ModelIteration{
+			ID:          db.NewDigest(iterationIDBytes),
+			ModelID:     createReq.ModelID,
+			Description: createReq.Description,
+			CreatedAt:   time.Now(),
+			Index:       nextIndex,
+		}
+
+		if err := txn.SetModelIteration(createReq.ModelID, &iteration); err != nil {
+			return errors.Wrap(err, "Failed to create model iteration")
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		http.Error(w, errors.Wrap(err, "Failed to get current iterations").Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var nextIndex uint64
-	if len(currentIterations) > 0 {
-		nextIndex = currentIterations[0].Index + 1
-	}
-
-	iteration := storage.ModelIteration{
-		ID:          storage.NewDigest(iterationIDBytes),
-		ModelID:     createReq.ModelID,
-		Description: createReq.Description,
-		CreatedAt:   time.Now(),
-		Index:       nextIndex,
-	}
-
-	if err := router.dbManager.CreateModelIteration(createReq.ModelID, &iteration); err != nil {
-		http.Error(w, errors.Wrap(err, "Failed to create model iteration").Error(), http.StatusInternalServerError)
+		switch {
+		case err.Error() == "Model not found":
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case err.Error() == "User does not have permission to create iterations for this model":
+			http.Error(w, err.Error(), http.StatusForbidden)
+		default:
+			http.Error(w, errors.Wrap(err, "Failed to create model iteration").Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -257,10 +287,10 @@ func (router *APIRouter) CreateModelIteration(w http.ResponseWriter, req *http.R
 }
 
 type GetModelIterationsRequest struct {
-	ModelID   storage.Digest `json:"model_id"`
-	MaxIndex  uint64         `json:"max_index"`
-	Limit     uint64         `json:"limit"`
-	AuthToken AuthToken      `json:"auth_token"`
+	ModelID   db.Digest `json:"model_id"`
+	MaxIndex  uint64    `json:"max_index"`
+	Limit     uint64    `json:"limit"`
+	AuthToken AuthToken `json:"auth_token"`
 }
 
 type GetModelIterationsResponse struct {
@@ -274,48 +304,58 @@ func (router *APIRouter) GetModelIterations(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	// Validate the AuthToken
 	claims, err := ValidateSessionKey(getReq.AuthToken.SessionKey)
 	if err != nil {
 		http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 		return
 	}
 
-	// Get the user ID from the claims
-	userID, err := storage.DigestFromString(claims.UserID)
+	userID, err := db.DigestFromString(claims.UserID)
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
 		return
 	}
 
-	// Get the model to ensure it belongs to the user
-	model, err := router.dbManager.GetModel(getReq.ModelID)
+	var response GetModelIterationsResponse
+	err = router.dbManager.View(func(txn *storage.DatabaseTransaction) error {
+		model, err := txn.GetModel(getReq.ModelID)
+		if err != nil {
+			return errors.Wrap(err, "Failed to get model")
+		}
+		if model == nil {
+			return errors.New("Model not found")
+		}
+		if model.UserID != userID {
+			return errors.New("User does not have permission to view iterations for this model")
+		}
+
+		if getReq.MaxIndex == 0 {
+			getReq.MaxIndex = math.MaxUint64
+		}
+		if getReq.Limit == 0 {
+			getReq.Limit = 10
+		}
+
+		iterations, err := txn.GetModelIterations(getReq.ModelID, getReq.MaxIndex, getReq.Limit)
+		if err != nil {
+			return errors.Wrap(err, "Failed to get model iterations")
+		}
+
+		response.Iterations = iterations
+		return nil
+	})
+
 	if err != nil {
-		http.Error(w, errors.Wrap(err, "Failed to get model").Error(), http.StatusInternalServerError)
-		return
-	}
-	if model == nil {
-		http.Error(w, "Model not found", http.StatusNotFound)
-		return
-	}
-	if model.UserID != userID {
-		http.Error(w, "User does not have permission to view iterations for this model", http.StatusForbidden)
-		return
-	}
-
-	if getReq.MaxIndex == 0 {
-		getReq.MaxIndex = math.MaxUint64
-	}
-	if getReq.Limit == 0 {
-		getReq.Limit = 10 // Default limit
-	}
-
-	iterations, err := router.dbManager.GetModelIterations(getReq.ModelID, getReq.MaxIndex, getReq.Limit)
-	if err != nil {
-		http.Error(w, errors.Wrap(err, "Failed to get model iterations").Error(), http.StatusInternalServerError)
+		switch {
+		case err.Error() == "Model not found":
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case err.Error() == "User does not have permission to view iterations for this model":
+			http.Error(w, err.Error(), http.StatusForbidden)
+		default:
+			http.Error(w, errors.Wrap(err, "Failed to get model iterations").Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
-	response := GetModelIterationsResponse{Iterations: iterations}
 	json.NewEncoder(w).Encode(response)
 }

@@ -9,6 +9,14 @@ import (
 	"path/filepath"
 )
 
+// TransactionFunc represents a function that runs within a transaction
+type TransactionFunc func(m *DatabaseTransaction) error
+
+type DatabaseTransaction struct {
+	client *DatabaseClient
+	txn    db.Transaction
+}
+
 type DatabaseManager struct {
 	client *DatabaseClient
 }
@@ -37,391 +45,363 @@ func (manager *DatabaseManager) GetDBPath() string {
 	return manager.client.GetDBPath()
 }
 
+func (manager *DatabaseManager) Update(fn TransactionFunc) error {
+	return manager.client.Update(func(txn db.Transaction) error {
+		dbTxn := &DatabaseTransaction{
+			client: manager.client,
+			txn:    txn,
+		}
+
+		return fn(dbTxn)
+	})
+}
+
+func (manager *DatabaseManager) View(fn TransactionFunc) error {
+	return manager.client.View(func(txn db.Transaction) error {
+		dbTxn := &DatabaseTransaction{
+			client: manager.client,
+			txn:    txn,
+		}
+		return fn(dbTxn)
+	})
+}
+
 // ==========================
 // User operations
 // ==========================
-func (manager *DatabaseManager) CreateUser(user *User) error {
+func (dbTxn *DatabaseTransaction) SetUser(user *User) error {
 	if user == nil {
 		return errors.New("SetUser: user is nil")
 	}
 
-	return manager.client.Update(func(txn db.Transaction) error {
-		return manager.client.SetUser(txn, user)
-	})
+	return dbTxn.client.SetUser(dbTxn.txn, user)
 }
 
-func (manager *DatabaseManager) GetUser(userID Digest) (*User, error) {
-	var user *User
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		user, err = manager.client.GetUser(txn, userID)
-		return err
-	})
-	return user, err
+func (dbTxn *DatabaseTransaction) GetUser(userID db.Digest) (*User, error) {
+	return dbTxn.client.GetUser(dbTxn.txn, userID)
 }
 
-func (manager *DatabaseManager) DeleteUser(userID Digest) error {
-
-	return manager.client.Update(func(txn db.Transaction) error {
-		// First, get the user to ensure it exists
-		user, err := manager.client.GetUser(txn, userID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteUser: failed to get user")
-		}
-		if user == nil {
-			return fmt.Errorf("DeleteUser: user not found for ID: %s", userID)
-		}
-
-		// Delete the user
-		err = manager.client.DeleteUser(txn, userID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteUser: failed to delete user")
-		}
-
-		// TODO: Consider if deleting associated data (e.g., threads, messages)
-
+func (dbTxn *DatabaseTransaction) DeleteUser(userID db.Digest) error {
+	// First, get the user to ensure it exists
+	user, err := dbTxn.client.GetUser(dbTxn.txn, userID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteUser: failed to get user")
+	}
+	if user == nil {
 		return nil
-	})
+	}
+
+	// Delete the user
+	err = dbTxn.client.DeleteUser(dbTxn.txn, userID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteUser: failed to delete user")
+	}
+
+	// TODO: Consider if deleting associated data (e.g., threads, messages)
+
+	return nil
 }
 
 // ==========================
 // Space operations
 // ==========================
-func (manager *DatabaseManager) CreateSpace(userID Digest, space *Space) error {
+func (dbTxn *DatabaseTransaction) SetSpace(userID db.Digest, space *Space) error {
 	if space == nil {
-		return errors.New("CreateSpace: space is nil")
+		return errors.New("SetSpace: space is nil")
 	}
 
-	return manager.client.Update(func(txn db.Transaction) error {
-		err := manager.client.SetSpace(txn, space)
-		if err != nil {
-			return errors.Wrap(err, "CreateSpace: failed to set space")
-		}
+	err := dbTxn.client.SetSpace(dbTxn.txn, space)
+	if err != nil {
+		return errors.Wrap(err, "SetSpace: failed to set space")
+	}
 
-		err = manager.client.SetUserSpace(txn, userID, space.UpdatedAt, space)
-		if err != nil {
-			return errors.Wrap(err, "CreateSpace: failed to set user space")
-		}
+	err = dbTxn.client.SetUserSpace(dbTxn.txn, userID, space.UpdatedAt, space)
+	if err != nil {
+		return errors.Wrap(err, "SetSpace: failed to set user space")
+	}
 
+	return nil
+}
+
+func (dbTxn *DatabaseTransaction) GetSpace(spaceID db.Digest) (*Space, error) {
+	return dbTxn.client.GetSpace(dbTxn.txn, spaceID)
+}
+
+func (dbTxn *DatabaseTransaction) GetUserSpaces(userID db.Digest, limit int, maxTimestamp uint64) ([]*Space, error) {
+	return dbTxn.client.GetUserSpacesReverse(dbTxn.txn, userID.Bytes(), maxTimestamp, limit)
+}
+
+func (dbTxn *DatabaseTransaction) DeleteSpace(spaceID db.Digest) error {
+	space, err := dbTxn.client.GetSpace(dbTxn.txn, spaceID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteSpace: failed to get space")
+	}
+	if space == nil {
 		return nil
-	})
-}
+	}
 
-func (manager *DatabaseManager) GetSpace(spaceID Digest) (*Space, error) {
-	var space *Space
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		space, err = manager.client.GetSpace(txn, spaceID)
-		return err
-	})
-	return space, err
-}
+	err = dbTxn.client.DeleteSpace(dbTxn.txn, spaceID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteSpace: failed to delete space")
+	}
 
-func (manager *DatabaseManager) GetUserSpaces(userID Digest, limit int, maxTimestamp uint64) ([]*Space, error) {
-	var spaces []*Space
+	err = dbTxn.client.DeleteUserSpace(dbTxn.txn, space.UserID, space.UpdatedAt)
+	if err != nil {
+		return errors.Wrap(err, "DeleteSpace: failed to delete user space")
+	}
 
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		spaces, err = manager.client.GetUserSpacesReverse(txn, userID.Bytes(), maxTimestamp, limit)
-		return err
-	})
-
-	return spaces, err
-}
-
-func (manager *DatabaseManager) DeleteSpace(spaceID Digest) error {
-	return manager.client.Update(func(txn db.Transaction) error {
-		space, err := manager.client.GetSpace(txn, spaceID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteSpace: failed to get space")
-		}
-		if space == nil {
-			return fmt.Errorf("DeleteSpace: space not found for ID: %s", spaceID)
-		}
-
-		err = manager.client.DeleteSpace(txn, spaceID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteSpace: failed to delete space")
-		}
-
-		err = manager.client.DeleteUserSpace(txn, space.UserID, space.UpdatedAt)
-		if err != nil {
-			return errors.Wrap(err, "DeleteSpace: failed to delete user space")
-		}
-
-		// TODO: Consider deleting associated threads and messages
-
-		return nil
-	})
+	return nil
 }
 
 // ==========================
 // Thread operations
 // ==========================
-// This shouldn't be called for updating a thread.
-func (manager *DatabaseManager) CreateThread(spaceID Digest, thread *Thread) error {
+func (dbTxn *DatabaseTransaction) SetThread(spaceID db.Digest, thread *Thread) error {
 	if thread == nil {
-		return errors.New("CreateThread: thread is nil")
+		return errors.New("SetThread: thread is nil")
 	}
 
-	return manager.client.Update(func(txn db.Transaction) error {
-		err := manager.client.SetThread(txn, thread)
-		if err != nil {
-			return errors.Wrap(err, "CreateThread: failed to set thread")
-		}
+	err := dbTxn.client.SetThread(dbTxn.txn, thread)
+	if err != nil {
+		return errors.Wrap(err, "SetThread: failed to set thread")
+	}
 
-		err = manager.client.SetSpaceThread(txn, spaceID, thread.UpdatedAt, thread)
-		if err != nil {
-			return errors.Wrap(err, "CreateThread: failed to set space thread")
-		}
+	err = dbTxn.client.SetSpaceThread(dbTxn.txn, spaceID, thread.UpdatedAt, thread)
+	if err != nil {
+		return errors.Wrap(err, "SetThread: failed to set space thread")
+	}
 
+	return nil
+}
+
+func (dbTxn *DatabaseTransaction) GetThread(threadID db.Digest) (*Thread, error) {
+	return dbTxn.client.GetThread(dbTxn.txn, threadID)
+}
+
+func (dbTxn *DatabaseTransaction) GetSpaceThreads(spaceID db.Digest, limit int, maxTimestamp uint64) ([]*Thread, error) {
+	return dbTxn.client.GetSpaceThreadsReverse(dbTxn.txn, spaceID.Bytes(), maxTimestamp, limit)
+}
+
+func (dbTxn *DatabaseTransaction) DeleteThread(threadID db.Digest) error {
+	thread, err := dbTxn.client.GetThread(dbTxn.txn, threadID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteThread: failed to get thread")
+	}
+	if thread == nil {
 		return nil
-	})
-}
+	}
 
-func (manager *DatabaseManager) GetThread(threadID Digest) (*Thread, error) {
-	var thread *Thread
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		thread, err = manager.client.GetThread(txn, threadID)
-		return err
-	})
-	return thread, err
-}
+	err = dbTxn.client.DeleteThread(dbTxn.txn, threadID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteThread: failed to delete thread")
+	}
 
-func (manager *DatabaseManager) GetSpaceThreads(spaceID Digest, limit int, maxTimestamp uint64) ([]*Thread, error) {
-	var threads []*Thread
+	err = dbTxn.client.DeleteSpaceThread(dbTxn.txn, thread.SpaceID, thread.UpdatedAt)
+	if err != nil {
+		return errors.Wrap(err, "DeleteThread: failed to delete space thread")
+	}
 
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		threads, err = manager.client.GetSpaceThreadsReverse(txn, spaceID.Bytes(), maxTimestamp, limit)
-		return err
-	})
-
-	return threads, err
-}
-
-func (manager *DatabaseManager) DeleteThread(threadID Digest) error {
-	return manager.client.Update(func(txn db.Transaction) error {
-		thread, err := manager.client.GetThread(txn, threadID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteThread: failed to get thread")
-		}
-		if thread == nil {
-			return fmt.Errorf("DeleteThread: thread not found for ID: %s", threadID)
-		}
-
-		err = manager.client.DeleteThread(txn, threadID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteThread: failed to delete thread")
-		}
-
-		err = manager.client.DeleteSpaceThread(txn, thread.SpaceID, thread.UpdatedAt)
-		if err != nil {
-			return errors.Wrap(err, "DeleteThread: failed to delete space thread")
-		}
-
-		// TODO: Consider deleting associated messages
-
-		return nil
-	})
+	return nil
 }
 
 // ==========================
 // Message operations
 // ==========================
-func (manager *DatabaseManager) CreateMessage(threadID Digest, msg *CompoundMessage) error {
+func (dbTxn *DatabaseTransaction) SetMessage(threadID db.Digest, msg *CompoundMessage) error {
 	if msg == nil {
-		return errors.New("CreateMessage: message is nil")
+		return errors.New("SetMessage: message is nil")
 	}
 
-	return manager.client.Update(func(txn db.Transaction) error {
-		err := manager.client.SetMessage(txn, msg)
-		if err != nil {
-			return errors.Wrap(err, "CreateMessage: failed to set message")
-		}
+	err := dbTxn.client.SetMessage(dbTxn.txn, msg)
+	if err != nil {
+		return errors.Wrap(err, "SetMessage: failed to set message")
+	}
 
-		err = manager.client.SetThreadMessage(txn, threadID, msg.UpdatedAt, msg)
-		if err != nil {
-			return errors.Wrap(err, "CreateMessage: failed to set thread message")
-		}
+	err = dbTxn.client.SetThreadMessage(dbTxn.txn, threadID, msg.UpdatedAt, msg)
+	if err != nil {
+		return errors.Wrap(err, "SetMessage: failed to set thread message")
+	}
 
+	return nil
+}
+
+func (dbTxn *DatabaseTransaction) GetMessage(messageID db.Digest) (*CompoundMessage, error) {
+	return dbTxn.client.GetMessage(dbTxn.txn, messageID)
+}
+
+func (dbTxn *DatabaseTransaction) GetThreadMessages(threadID db.Digest, limit int, maxTimestamp uint64) ([]*CompoundMessage, error) {
+	return dbTxn.client.GetThreadMessagesReverse(dbTxn.txn, threadID.Bytes(), maxTimestamp, limit)
+}
+
+func (dbTxn *DatabaseTransaction) DeleteMessage(messageID db.Digest) error {
+	message, err := dbTxn.client.GetMessage(dbTxn.txn, messageID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteMessage: failed to get message")
+	}
+	if message == nil {
 		return nil
-	})
+	}
+
+	err = dbTxn.client.DeleteMessage(dbTxn.txn, messageID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteMessage: failed to delete message")
+	}
+
+	err = dbTxn.client.DeleteThreadMessage(dbTxn.txn, message.ThreadID, message.UpdatedAt)
+	if err != nil {
+		return errors.Wrap(err, "DeleteMessage: failed to delete thread message")
+	}
+
+	return nil
 }
 
-func (manager *DatabaseManager) GetMessage(messageID Digest) (*CompoundMessage, error) {
-	var message *CompoundMessage
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		message, err = manager.client.GetMessage(txn, messageID)
-		return err
-	})
-	return message, err
-}
+func (dbTxn *DatabaseTransaction) GetMessagePath(leafMessageID db.Digest, messageIndex uint64, limit int) ([]*CompoundMessage, error) {
+	if limit <= 0 {
+		return nil, errors.New("GetMessagePath: limit must be positive")
+	}
 
-func (manager *DatabaseManager) GetThreadMessages(threadID Digest, limit int, maxTimestamp uint64) ([]*CompoundMessage, error) {
+	// Get the initial message
+	leafMessage, err := dbTxn.GetMessage(leafMessageID)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetMessagePath: failed to get leaf message")
+	}
+	if leafMessage == nil {
+		return nil, errors.New("GetMessagePath: leaf message not found")
+	}
+
+	// Validate message index
+	if int(messageIndex) >= len(leafMessage.Messages) {
+		return nil, fmt.Errorf("GetMessagePath: invalid message index %d for message with %d messages",
+			messageIndex, len(leafMessage.Messages))
+	}
+
 	var messages []*CompoundMessage
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		messages, err = manager.client.GetThreadMessagesReverse(txn, threadID.Bytes(), maxTimestamp, limit)
-		return err
-	})
-	return messages, err
-}
+	messages = append(messages, leafMessage)
+	currentMsg := leafMessage
 
-func (manager *DatabaseManager) DeleteMessage(messageID Digest) error {
-	return manager.client.Update(func(txn db.Transaction) error {
-		message, err := manager.client.GetMessage(txn, messageID)
+	// Follow the parent chain until we reach the limit or a message without a parent
+	for len(messages) < limit && currentMsg.ParentID != nil {
+		parentMsg, err := dbTxn.GetMessage(currentMsg.ParentID.ID)
 		if err != nil {
-			return errors.Wrap(err, "DeleteMessage: failed to get message")
+			return nil, errors.Wrap(err, "GetMessagePath: failed to get parent message")
 		}
-		if message == nil {
-			return fmt.Errorf("DeleteMessage: message not found for ID: %s", messageID)
-		}
-
-		err = manager.client.DeleteMessage(txn, messageID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteMessage: failed to delete message")
+		if parentMsg == nil {
+			break // Parent message not found - could have been deleted
 		}
 
-		err = manager.client.DeleteThreadMessage(txn, message.ThreadID, message.UpdatedAt)
-		if err != nil {
-			return errors.Wrap(err, "DeleteMessage: failed to delete thread message")
+		// Validate parent message index
+		if int(currentMsg.ParentID.MessageID) >= len(parentMsg.Messages) {
+			return nil, fmt.Errorf("GetMessagePath: invalid parent message index %d for message with %d messages",
+				currentMsg.ParentID.MessageID, len(parentMsg.Messages))
 		}
 
-		return nil
-	})
+		messages = append(messages, parentMsg)
+		currentMsg = parentMsg
+	}
+
+	// Reverse the slice to get chronological order
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
 }
 
 // ==========================
 // Model operations
 // ==========================
-func (manager *DatabaseManager) CreateModel(userID Digest, model *ModelInfo) error {
+func (dbTxn *DatabaseTransaction) SetModel(userID db.Digest, model *ModelInfo) error {
 	if model == nil {
-		return errors.New("CreateModel: model is nil")
+		return errors.New("SetModel: model is nil")
 	}
 
-	return manager.client.Update(func(txn db.Transaction) error {
-		err := manager.client.SetModel(txn, model)
-		if err != nil {
-			return errors.Wrap(err, "CreateModel: failed to set model")
-		}
+	err := dbTxn.client.SetModel(dbTxn.txn, model)
+	if err != nil {
+		return errors.Wrap(err, "SetModel: failed to set model")
+	}
 
-		err = manager.client.SetUserModel(txn, userID, model.UpdatedAt, model)
-		if err != nil {
-			return errors.Wrap(err, "CreateModel: failed to set user model")
-		}
+	err = dbTxn.client.SetUserModel(dbTxn.txn, userID, model.UpdatedAt, model)
+	if err != nil {
+		return errors.Wrap(err, "SetModel: failed to set user model")
+	}
 
+	return nil
+}
+
+func (dbTxn *DatabaseTransaction) GetModel(modelID db.Digest) (*ModelInfo, error) {
+	return dbTxn.client.GetModel(dbTxn.txn, modelID)
+}
+
+func (dbTxn *DatabaseTransaction) GetUserModels(userID db.Digest, limit int, maxTimestamp uint64) ([]*ModelInfo, error) {
+	return dbTxn.client.GetUserModelsReverse(dbTxn.txn, userID.Bytes(), maxTimestamp, limit)
+}
+
+func (dbTxn *DatabaseTransaction) DeleteModel(modelID db.Digest) error {
+	model, err := dbTxn.client.GetModel(dbTxn.txn, modelID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteModel: failed to get model")
+	}
+	if model == nil {
 		return nil
-	})
-}
+	}
 
-func (manager *DatabaseManager) GetModel(modelID Digest) (*ModelInfo, error) {
-	var model *ModelInfo
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		model, err = manager.client.GetModel(txn, modelID)
-		return err
-	})
-	return model, err
-}
+	err = dbTxn.client.DeleteModel(dbTxn.txn, modelID)
+	if err != nil {
+		return errors.Wrap(err, "DeleteModel: failed to delete model")
+	}
 
-func (manager *DatabaseManager) GetUserModels(userID Digest, limit int, maxTimestamp uint64) ([]*ModelInfo, error) {
-	var models []*ModelInfo
+	err = dbTxn.client.DeleteUserModel(dbTxn.txn, model.UserID, model.UpdatedAt)
+	if err != nil {
+		return errors.Wrap(err, "DeleteModel: failed to delete user model")
+	}
 
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		models, err = manager.client.GetUserModelsReverse(txn, userID.Bytes(), maxTimestamp, limit)
-		return err
-	})
-
-	return models, err
-}
-
-func (manager *DatabaseManager) DeleteModel(modelID Digest) error {
-	return manager.client.Update(func(txn db.Transaction) error {
-		model, err := manager.client.GetModel(txn, modelID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteModel: failed to get model")
-		}
-		if model == nil {
-			return fmt.Errorf("DeleteModel: model not found for ID: %s", modelID)
-		}
-
-		err = manager.client.DeleteModel(txn, modelID)
-		if err != nil {
-			return errors.Wrap(err, "DeleteModel: failed to delete model")
-		}
-
-		err = manager.client.DeleteUserModel(txn, model.UserID, model.UpdatedAt)
-		if err != nil {
-			return errors.Wrap(err, "DeleteModel: failed to delete user model")
-		}
-
-		// TODO: Consider deleting associated model iterations
-
-		return nil
-	})
+	return nil
 }
 
 // ==========================
 // ModelIteration operations
 // ==========================
-func (manager *DatabaseManager) CreateModelIteration(modelID Digest, iteration *ModelIteration) error {
+func (dbTxn *DatabaseTransaction) SetModelIteration(modelID db.Digest, iteration *ModelIteration) error {
 	if iteration == nil {
-		return errors.New("CreateModelIteration: iteration is nil")
+		return errors.New("SetModelIteration: iteration is nil")
 	}
 
-	return manager.client.Update(func(txn db.Transaction) error {
-		// Ensure the previous iteration exists, unless it's the first iteration
-		if iteration.Index > 0 {
-			// Get the latest iteration to determine the next index
-			latestIterations, err := manager.client.GetModelIterationsReverse(txn, modelID.Bytes(), math.MaxUint64, 1)
-			if err != nil {
-				return errors.Wrap(err, "CreateModelIteration: failed to get latest iteration")
-			}
-			if len(latestIterations) == 0 {
-				return fmt.Errorf("CreateModelIteration: previous iteration (index %d) does not exist", iteration.Index-1)
-			}
-		}
-
-		err := manager.client.SetModelIteration(txn, modelID, iteration.Index, iteration)
+	// Ensure the previous iteration exists, unless it's the first iteration
+	if iteration.Index > 0 {
+		latestIterations, err := dbTxn.client.GetModelIterationsReverse(dbTxn.txn, modelID.Bytes(), math.MaxUint64, 1)
 		if err != nil {
-			return errors.Wrap(err, "CreateModelIteration: failed to set model iteration")
+			return errors.Wrap(err, "SetModelIteration: failed to get latest iteration")
 		}
+		if len(latestIterations) == 0 {
+			return fmt.Errorf("SetModelIteration: previous iteration (index %d) does not exist", iteration.Index-1)
+		}
+	}
 
-		return nil
-	})
+	err := dbTxn.client.SetModelIteration(dbTxn.txn, modelID, iteration.Index, iteration)
+	if err != nil {
+		return errors.Wrap(err, "SetModelIteration: failed to set model iteration")
+	}
+
+	return nil
 }
 
-func (manager *DatabaseManager) GetModelIterations(modelID Digest, maxIndex, limit uint64) ([]*ModelIteration, error) {
-	var iterations []*ModelIteration
-
-	err := manager.client.View(func(txn db.Transaction) error {
-		var err error
-		iterations, err = manager.client.GetModelIterationsReverse(txn, modelID.Bytes(), maxIndex, limit)
-		return err
-	})
-
-	return iterations, err
+func (dbTxn *DatabaseTransaction) GetModelIterations(modelID db.Digest, maxIndex, limit uint64) ([]*ModelIteration, error) {
+	return dbTxn.client.GetModelIterationsReverse(dbTxn.txn, modelID.Bytes(), maxIndex, limit)
 }
 
-func (manager *DatabaseManager) DeleteModelIteration(modelID Digest, index uint64) error {
-	return manager.client.Update(func(txn db.Transaction) error {
-		iterations, err := manager.client.GetModelIterationsReverse(txn, modelID.Bytes(), index, 1)
-		if err != nil {
-			return errors.Wrap(err, "DeleteModelIteration: failed to get iteration")
-		}
-		if len(iterations) == 0 {
-			return fmt.Errorf("DeleteModelIteration: iteration not found for model ID: %s and index: %d", modelID, index)
-		}
+func (dbTxn *DatabaseTransaction) DeleteModelIteration(modelID db.Digest, index uint64) error {
+	iterations, err := dbTxn.client.GetModelIterationsReverse(dbTxn.txn, modelID.Bytes(), index, 1)
+	if err != nil {
+		return errors.Wrap(err, "DeleteModelIteration: failed to get iteration")
+	}
+	if len(iterations) == 0 {
+		return fmt.Errorf("DeleteModelIteration: iteration not found for model ID: %s and index: %d", modelID, index)
+	}
 
-		err = manager.client.DeleteModelIteration(txn, modelID, index)
-		if err != nil {
-			return errors.Wrap(err, "DeleteModelIteration: failed to delete model iteration")
-		}
+	err = dbTxn.client.DeleteModelIteration(dbTxn.txn, modelID, index)
+	if err != nil {
+		return errors.Wrap(err, "DeleteModelIteration: failed to delete model iteration")
+	}
 
-		return nil
-	})
+	return nil
 }

@@ -43,6 +43,7 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(NewGetUserCommand())
 	rootCmd.AddCommand(NewDeleteUserCommand())
 	rootCmd.AddCommand(NewGetThreadsCommand())
+	rootCmd.AddCommand(NewGetSpacesCommand())
 
 	return rootCmd
 }

@@ -2,38 +2,9 @@ package storage
 
 import (
 	"encoding/binary"
-	"encoding/hex"
-	"fmt"
+	"github.com/nlpfollower/deltamind/database/db"
 	"time"
 )
-
-// Digest represents a 256-bit (32-byte) digest of a hash function
-type Digest [32]byte
-
-func NewDigest(data []byte) Digest {
-	var d Digest
-	copy(d[:], data)
-	return d
-}
-
-func (d Digest) Bytes() []byte {
-	return d[:]
-}
-
-func (d Digest) String() string {
-	return hex.EncodeToString(d[:])
-}
-
-func DigestFromString(s string) (Digest, error) {
-	bytes, err := hex.DecodeString(s)
-	if err != nil {
-		return Digest{}, err
-	}
-	if len(bytes) != 32 {
-		return Digest{}, fmt.Errorf("invalid digest length: got %d, want 32", len(bytes))
-	}
-	return NewDigest(bytes), nil
-}
 
 // AuthMethod represents the method used for authentication
 type AuthMethod string
@@ -45,7 +16,7 @@ const (
 )
 
 type User struct {
-	ID            Digest     `json:"id"`
+	ID            db.Digest  `json:"id"`
 	Email         string     `json:"email"`
 	Username      string     `json:"username"`
 	PasswordHash  []byte     `json:"password_hash"`
@@ -55,9 +26,9 @@ type User struct {
 }
 
 type Space struct {
-	ID          Digest    `json:"id"`
-	UserID      Digest    `json:"user_id"`
-	ContentID   Digest    `json:"content_id"`
+	ID          db.Digest `json:"id"`
+	UserID      db.Digest `json:"user_id"`
+	ContentID   db.Digest `json:"content_id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -65,21 +36,21 @@ type Space struct {
 }
 
 type Thread struct {
-	ID        Digest    `json:"id"`
-	SpaceID   Digest    `json:"space_id"`
+	ID        db.Digest `json:"id"`
+	SpaceID   db.Digest `json:"space_id"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type CompoundMessageID struct {
-	ID        Digest `json:"id"`
-	MessageID uint64 `json:"message_id"`
+	ID        db.Digest `json:"id"`
+	MessageID uint64    `json:"message_id"`
 }
 
 type CompoundMessage struct {
-	ID        Digest             `json:"id"`
-	ThreadID  Digest             `json:"thread_id"`
+	ID        db.Digest          `json:"id"`
+	ThreadID  db.Digest          `json:"thread_id"`
 	ParentID  *CompoundMessageID `json:"parent_id,omitempty"`
 	Author    string             `json:"author"`
 	Messages  []string           `json:"messages"`
@@ -88,24 +59,24 @@ type CompoundMessage struct {
 }
 
 type ModelInfo struct {
-	ID        Digest    `json:"id"`
-	UserID    Digest    `json:"user_id"`
-	ContentID Digest    `json:"content_id"`
+	ID        db.Digest `json:"id"`
+	UserID    db.Digest `json:"user_id"`
+	ContentID db.Digest `json:"content_id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type ModelIteration struct {
-	ID          Digest    `json:"id"`
-	ModelID     Digest    `json:"model_id"`
+	ID          db.Digest `json:"id"`
+	ModelID     db.Digest `json:"model_id"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
 	Index       uint64    `json:"index"`
 }
 
-func NewKeyFromUint64(value uint64) Digest {
-	var d Digest
+func NewKeyFromUint64(value uint64) db.Digest {
+	var d db.Digest
 	binary.BigEndian.PutUint64(d[:8], value)
 	return d
 }

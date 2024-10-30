@@ -4,15 +4,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"testing"
+	"time"
 )
 
 type TestServer struct {
-	Server *Server
-	URL    string
+	Server          *Server
+	URL             string
+	WsURL           string
+	MockNexusServer *MockNexusServer
+	httpServer      *httptest.Server
 }
 
 func NewTestServer(t *testing.T) *TestServer {
@@ -21,26 +27,75 @@ func NewTestServer(t *testing.T) *TestServer {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
 
-	server, err := NewServer(tempDir)
+	// Start the mock Nexus server with port 0 (system assigned)
+	mockNexus, err := NewMockNexusServer(0)
+	if err != nil {
+		t.Fatalf("Failed to create mock Nexus server: %v", err)
+	}
+
+	// Get the assigned port from the listener's address
+	nexusPort := mockNexus.listener.Addr().(*net.TCPAddr).Port
+
+	server, err := NewServer(tempDir, nexusPort)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 
-	// Use httptest.NewServer to create a test server
-	testServer := httptest.NewServer(server.router)
+	// Start the NexusClient
+	server.nexusClient.Start()
 
-	return &TestServer{
-		Server: server,
-		URL:    testServer.URL,
+	// Use httptest.NewServer to create a test server
+	httpServer := httptest.NewServer(server.router)
+
+	// Create WebSocket URL
+	wsURL := url.URL{Scheme: "ws", Host: httpServer.Listener.Addr().String(), Path: "/ws"}
+
+	ts := &TestServer{
+		Server:          server,
+		URL:             httpServer.URL,
+		WsURL:           wsURL.String(),
+		MockNexusServer: mockNexus,
+		httpServer:      httpServer,
 	}
+
+	// Wait for the NexusClient to establish a connection
+	if err := ts.waitForNexusConnection(5 * time.Second); err != nil {
+		t.Fatalf("NexusClient failed to connect: %v", err)
+	}
+
+	return ts
 }
 
 func (ts *TestServer) Close() {
+	// Stop the NexusClient
+	ts.Server.nexusClient.Stop()
+
+	// Close the HTTP test server
+	ts.httpServer.Close()
+
 	// Close the database manager
 	ts.Server.dbManager.Close()
 
+	// Close the mock Nexus server
+	ts.MockNexusServer.Close()
+
 	// Remove the temporary directory
 	os.RemoveAll(ts.Server.dbManager.GetDBPath())
+}
+
+func (ts *TestServer) waitForNexusConnection(timeout time.Duration) error {
+	start := time.Now()
+	for {
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timeout waiting for Nexus connection")
+		}
+
+		if ts.Server.nexusClient.isConnected {
+			return nil
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func performRequest[Req any, Resp any](t *testing.T, ts *TestServer, method, path string, req Req) (*Resp, error) {

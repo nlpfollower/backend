@@ -19,8 +19,7 @@ func TestMessageCreationAndRetrieval(t *testing.T) {
 	space := createTestSpace(t, ts, user)
 
 	// Create a thread within the space
-	thread, err := createTestThread(t, ts, user, space, "Test Thread")
-	require.NoError(t, err)
+	thread := createTestThread(t, ts, user, space, "Test Thread")
 
 	// Create 10 messages in the thread
 	createdMessages := createTestMessages(t, ts, user, thread, 10)
@@ -33,17 +32,6 @@ func TestMessageCreationAndRetrieval(t *testing.T) {
 
 	// Test creating a message with a parent
 	testCreateMessageWithParent(t, ts, user, thread, createdMessages[0])
-}
-
-func createTestThread(t *testing.T, ts *TestServer, user *SignUpResponse, space *storage.Space, title string) (*storage.Thread, error) {
-	createThreadReq := CreateThreadRequest{
-		SpaceID:   space.ID,
-		Title:     title,
-		AuthToken: user.AuthToken,
-	}
-	createThreadResp, err := performRequest[CreateThreadRequest, CreateThreadResponse](t, ts, "POST", "/api/v0/create-thread", createThreadReq)
-	require.NoError(t, err)
-	return &createThreadResp.Thread, nil
 }
 
 func createTestMessages(t *testing.T, ts *TestServer, user *SignUpResponse, thread *storage.Thread, count int) []*storage.CompoundMessage {
@@ -172,4 +160,156 @@ func testCreateMessageWithParent(t *testing.T, ts *TestServer, user *SignUpRespo
 	require.Equal(t, createMessageResp.Message.ID, getMessagesResp.Messages[0].ID)
 	require.Equal(t, parentMessage.ID, getMessagesResp.Messages[0].ParentID.ID)
 	require.Equal(t, uint64(0), getMessagesResp.Messages[0].ParentID.MessageID)
+}
+
+func TestMessageTimestampPropagation(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	t.Run("Basic Timestamp Propagation", func(t *testing.T) {
+		// Create test user and initial structure
+		user, err := createTestUser(t, ts, "user1@example.com", "testuser1", "password123")
+		require.NoError(t, err)
+
+		// Create spaces and verify initial order
+		space1 := createTestSpace(t, ts, user)
+		time.Sleep(time.Millisecond * 10)
+		space2 := createTestSpace(t, ts, user)
+
+		getSpacesReq := GetSpacesRequest{
+			Limit:     10,
+			AuthToken: user.AuthToken,
+		}
+		getSpacesResp, err := performRequest[GetSpacesRequest, GetSpacesResponse](t, ts, "POST", "/api/v0/get-spaces", getSpacesReq)
+		require.NoError(t, err)
+		require.Equal(t, space2.ID, getSpacesResp.Spaces[0].ID, "Initially, space2 should be first")
+
+		// Create thread in space1
+		thread := createTestThread(t, ts, user, space1, "Test Thread")
+		time.Sleep(time.Millisecond * 10)
+
+		// Create message and verify timestamp propagation
+		createMessageReq := CreateMessageRequest{
+			ThreadID:  thread.ID,
+			Author:    "user",
+			Content:   "Test message",
+			AuthToken: user.AuthToken,
+		}
+		createMessageResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/api/v0/create-message", createMessageReq)
+		require.NoError(t, err)
+
+		// Get updated spaces and verify order
+		getSpacesResp, err = performRequest[GetSpacesRequest, GetSpacesResponse](t, ts, "POST", "/api/v0/get-spaces", getSpacesReq)
+		require.NoError(t, err)
+		require.Equal(t, space1.ID, getSpacesResp.Spaces[0].ID, "After message creation, space1 should be first")
+		require.Equal(t, createMessageResp.Message.UpdatedAt, getSpacesResp.Spaces[0].UpdatedAt)
+
+		// Verify thread timestamp
+		getThreadsReq := GetThreadsRequest{
+			SpaceID:   space1.ID,
+			Limit:     1,
+			AuthToken: user.AuthToken,
+		}
+		getThreadsResp, err := performRequest[GetThreadsRequest, GetThreadsResponse](t, ts, "POST", "/api/v0/get-threads", getThreadsReq)
+		require.NoError(t, err)
+		require.Equal(t, createMessageResp.Message.UpdatedAt, getThreadsResp.Threads[0].UpdatedAt)
+	})
+
+	t.Run("Multiple Messages Timestamp Order", func(t *testing.T) {
+		user, err := createTestUser(t, ts, "user2@example.com", "testuser2", "password123")
+		require.NoError(t, err)
+
+		space := createTestSpace(t, ts, user)
+		thread := createTestThread(t, ts, user, space, "Test Thread")
+
+		// Create multiple messages
+		var lastTimestamp time.Time
+		for i := 0; i < 3; i++ {
+			createMessageReq := CreateMessageRequest{
+				ThreadID:  thread.ID,
+				Author:    "user",
+				Content:   "Test message",
+				AuthToken: user.AuthToken,
+			}
+			createMessageResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/api/v0/create-message", createMessageReq)
+			require.NoError(t, err)
+
+			// Verify thread timestamp is updated
+			getThreadsReq := GetThreadsRequest{
+				SpaceID:   space.ID,
+				Limit:     1,
+				AuthToken: user.AuthToken,
+			}
+			getThreadsResp, err := performRequest[GetThreadsRequest, GetThreadsResponse](t, ts, "POST", "/api/v0/get-threads", getThreadsReq)
+			require.NoError(t, err)
+			require.Equal(t, createMessageResp.Message.UpdatedAt, getThreadsResp.Threads[0].UpdatedAt)
+
+			// Verify space timestamp is updated
+			getSpacesReq := GetSpacesRequest{
+				Limit:     1,
+				AuthToken: user.AuthToken,
+			}
+			getSpacesResp, err := performRequest[GetSpacesRequest, GetSpacesResponse](t, ts, "POST", "/api/v0/get-spaces", getSpacesReq)
+			require.NoError(t, err)
+			require.Equal(t, createMessageResp.Message.UpdatedAt, getSpacesResp.Spaces[0].UpdatedAt)
+
+			if !lastTimestamp.IsZero() {
+				require.True(t, createMessageResp.Message.UpdatedAt.After(lastTimestamp))
+			}
+			lastTimestamp = createMessageResp.Message.UpdatedAt
+			time.Sleep(time.Millisecond * 10)
+		}
+	})
+
+	t.Run("Pagination After Message Creation", func(t *testing.T) {
+		user, err := createTestUser(t, ts, "user3@example.com", "testuser3", "password123")
+		require.NoError(t, err)
+
+		// Create multiple spaces
+		spaces := createTestSpaces(t, ts, user, 5)
+		middleSpace := spaces[2]
+
+		// Create thread in middle space
+		thread := createTestThread(t, ts, user, middleSpace, "Test Thread")
+
+		// Create message to update timestamps
+		createMessageReq := CreateMessageRequest{
+			ThreadID:  thread.ID,
+			Author:    "user",
+			Content:   "Test message",
+			AuthToken: user.AuthToken,
+		}
+		_, err = performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/api/v0/create-message", createMessageReq)
+		require.NoError(t, err)
+
+		// Verify space pagination shows middle space first
+		var allSpaces []*storage.Space
+		var maxTimestamp uint64 = uint64(time.Now().Add(time.Hour).UnixNano())
+		pageSize := 2
+
+		for {
+			getSpacesReq := GetSpacesRequest{
+				Limit:        pageSize,
+				MaxTimestamp: maxTimestamp,
+				AuthToken:    user.AuthToken,
+			}
+			getSpacesResp, err := performRequest[GetSpacesRequest, GetSpacesResponse](t, ts, "POST", "/api/v0/get-spaces", getSpacesReq)
+			require.NoError(t, err)
+
+			if len(getSpacesResp.Spaces) == 0 {
+				break
+			}
+
+			allSpaces = append(allSpaces, getSpacesResp.Spaces...)
+
+			if getSpacesResp.NextMaxTimestamp != nil {
+				maxTimestamp = *getSpacesResp.NextMaxTimestamp
+			} else {
+				break
+			}
+		}
+
+		require.Len(t, allSpaces, 5)
+		require.Equal(t, middleSpace.ID, allSpaces[0].ID, "Space with new message should be first")
+	})
 }

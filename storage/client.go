@@ -144,12 +144,12 @@ func (client *DatabaseClient) SetUser(txn db.Transaction, user *User) error {
 	return txn.Set(key, userBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteUser(txn db.Transaction, userID Digest) error {
+func (client *DatabaseClient) DeleteUser(txn db.Transaction, userID db.Digest) error {
 	ctx, key := client.getKeyForPrimaryUser(userID.Bytes())
 	return txn.Delete(key, ctx)
 }
 
-func (client *DatabaseClient) GetUser(txn db.Transaction, userID Digest) (*User, error) {
+func (client *DatabaseClient) GetUser(txn db.Transaction, userID db.Digest) (*User, error) {
 	ctx, key := client.getKeyForPrimaryUser(userID.Bytes())
 	userBytes, err := txn.Get(key, ctx)
 	if err != nil {
@@ -179,12 +179,12 @@ func (client *DatabaseClient) SetSpace(txn db.Transaction, space *Space) error {
 	return txn.Set(key, spaceBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteSpace(txn db.Transaction, spaceID Digest) error {
+func (client *DatabaseClient) DeleteSpace(txn db.Transaction, spaceID db.Digest) error {
 	ctx, key := client.getKeyForPrimarySpace(spaceID.Bytes())
 	return txn.Delete(key, ctx)
 }
 
-func (client *DatabaseClient) GetSpace(txn db.Transaction, spaceID Digest) (*Space, error) {
+func (client *DatabaseClient) GetSpace(txn db.Transaction, spaceID db.Digest) (*Space, error) {
 	ctx, key := client.getKeyForPrimarySpace(spaceID.Bytes())
 	spaceBytes, err := txn.Get(key, ctx)
 	if err != nil {
@@ -214,12 +214,12 @@ func (client *DatabaseClient) SetThread(txn db.Transaction, thread *Thread) erro
 	return txn.Set(key, threadBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteThread(txn db.Transaction, threadID Digest) error {
+func (client *DatabaseClient) DeleteThread(txn db.Transaction, threadID db.Digest) error {
 	ctx, key := client.getKeyForPrimaryThread(threadID.Bytes())
 	return txn.Delete(key, ctx)
 }
 
-func (client *DatabaseClient) GetThread(txn db.Transaction, threadID Digest) (*Thread, error) {
+func (client *DatabaseClient) GetThread(txn db.Transaction, threadID db.Digest) (*Thread, error) {
 	ctx, key := client.getKeyForPrimaryThread(threadID.Bytes())
 	threadBytes, err := txn.Get(key, ctx)
 	if err != nil {
@@ -245,16 +245,19 @@ func (client *DatabaseClient) SetMessage(txn db.Transaction, msg *CompoundMessag
 	return txn.Set(key, msgBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteMessage(txn db.Transaction, messageID Digest) error {
+func (client *DatabaseClient) DeleteMessage(txn db.Transaction, messageID db.Digest) error {
 	ctx, key := client.getKeyForPrimaryMessage(messageID.Bytes())
 	return txn.Delete(key, ctx)
 }
 
-func (client *DatabaseClient) GetMessage(txn db.Transaction, messageID Digest) (*CompoundMessage, error) {
+func (client *DatabaseClient) GetMessage(txn db.Transaction, messageID db.Digest) (*CompoundMessage, error) {
 	ctx, key := client.getKeyForPrimaryMessage(messageID.Bytes())
 	msgBytes, err := txn.Get(key, ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "GetMessage: failed to get message")
+	}
+	if msgBytes == nil {
+		return nil, nil
 	}
 	var msg CompoundMessage
 	err = json.Unmarshal(msgBytes, &msg)
@@ -276,12 +279,12 @@ func (client *DatabaseClient) SetModel(txn db.Transaction, model *ModelInfo) err
 	return txn.Set(key, modelBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteModel(txn db.Transaction, modelID Digest) error {
+func (client *DatabaseClient) DeleteModel(txn db.Transaction, modelID db.Digest) error {
 	ctx, key := client.getKeyForPrimaryModel(modelID.Bytes())
 	return txn.Delete(key, ctx)
 }
 
-func (client *DatabaseClient) GetModel(txn db.Transaction, modelID Digest) (*ModelInfo, error) {
+func (client *DatabaseClient) GetModel(txn db.Transaction, modelID db.Digest) (*ModelInfo, error) {
 	ctx, key := client.getKeyForPrimaryModel(modelID.Bytes())
 	modelBytes, err := txn.Get(key, ctx)
 	if err != nil {
@@ -302,7 +305,7 @@ func (client *DatabaseClient) GetModel(txn db.Transaction, modelID Digest) (*Mod
 // ==========================
 // Secondary User Space operations
 // ==========================
-func (client *DatabaseClient) SetUserSpace(txn db.Transaction, userID Digest, timestamp time.Time, space *Space) error {
+func (client *DatabaseClient) SetUserSpace(txn db.Transaction, userID db.Digest, timestamp time.Time, space *Space) error {
 	ctx, key := client.getKeyForSecondaryUserSpace(userID.Bytes(), timestamp)
 	spaceBytes, err := json.Marshal(space)
 	if err != nil {
@@ -311,7 +314,7 @@ func (client *DatabaseClient) SetUserSpace(txn db.Transaction, userID Digest, ti
 	return txn.Set(key, spaceBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteUserSpace(txn db.Transaction, userID Digest, timestamp time.Time) error {
+func (client *DatabaseClient) DeleteUserSpace(txn db.Transaction, userID db.Digest, timestamp time.Time) error {
 	ctx, key := client.getKeyForSecondaryUserSpace(userID.Bytes(), timestamp)
 	return txn.Delete(key, ctx)
 }
@@ -357,7 +360,7 @@ func (client *DatabaseClient) GetUserSpacesReverse(txn db.Transaction, userID []
 // ==========================
 // Secondary Space Thread operations
 // ==========================
-func (client *DatabaseClient) SetSpaceThread(txn db.Transaction, spaceID Digest, timestamp time.Time, thread *Thread) error {
+func (client *DatabaseClient) SetSpaceThread(txn db.Transaction, spaceID db.Digest, timestamp time.Time, thread *Thread) error {
 	ctx, key := client.getKeyForSecondarySpaceThread(spaceID.Bytes(), timestamp)
 	threadBytes, err := json.Marshal(thread)
 	if err != nil {
@@ -366,7 +369,7 @@ func (client *DatabaseClient) SetSpaceThread(txn db.Transaction, spaceID Digest,
 	return txn.Set(key, threadBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteSpaceThread(txn db.Transaction, spaceID Digest, timestamp time.Time) error {
+func (client *DatabaseClient) DeleteSpaceThread(txn db.Transaction, spaceID db.Digest, timestamp time.Time) error {
 	ctx, key := client.getKeyForSecondarySpaceThread(spaceID.Bytes(), timestamp)
 	return txn.Delete(key, ctx)
 }
@@ -412,7 +415,7 @@ func (client *DatabaseClient) GetSpaceThreadsReverse(txn db.Transaction, spaceID
 // ==========================
 // Secondary Thread Messages operations
 // ==========================
-func (client *DatabaseClient) SetThreadMessage(txn db.Transaction, threadID Digest, timestamp time.Time, message *CompoundMessage) error {
+func (client *DatabaseClient) SetThreadMessage(txn db.Transaction, threadID db.Digest, timestamp time.Time, message *CompoundMessage) error {
 	ctx, key := client.getKeyForSecondaryThreadMessageTimestamp(threadID.Bytes(), timestamp)
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
@@ -421,7 +424,7 @@ func (client *DatabaseClient) SetThreadMessage(txn db.Transaction, threadID Dige
 	return txn.Set(key, messageBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteThreadMessage(txn db.Transaction, threadID Digest, timestamp time.Time) error {
+func (client *DatabaseClient) DeleteThreadMessage(txn db.Transaction, threadID db.Digest, timestamp time.Time) error {
 	ctx, key := client.getKeyForSecondaryThreadMessageTimestamp(threadID.Bytes(), timestamp)
 	return txn.Delete(key, ctx)
 }
@@ -467,7 +470,7 @@ func (client *DatabaseClient) GetThreadMessagesReverse(txn db.Transaction, threa
 // ==========================
 // Secondary User Model operations
 // ==========================
-func (client *DatabaseClient) SetUserModel(txn db.Transaction, userID Digest, timestamp time.Time, model *ModelInfo) error {
+func (client *DatabaseClient) SetUserModel(txn db.Transaction, userID db.Digest, timestamp time.Time, model *ModelInfo) error {
 	ctx, key := client.getKeyForSecondaryUserModel(userID.Bytes(), timestamp)
 	modelBytes, err := json.Marshal(model)
 	if err != nil {
@@ -476,7 +479,7 @@ func (client *DatabaseClient) SetUserModel(txn db.Transaction, userID Digest, ti
 	return txn.Set(key, modelBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteUserModel(txn db.Transaction, userID Digest, timestamp time.Time) error {
+func (client *DatabaseClient) DeleteUserModel(txn db.Transaction, userID db.Digest, timestamp time.Time) error {
 	ctx, key := client.getKeyForSecondaryUserModel(userID.Bytes(), timestamp)
 	return txn.Delete(key, ctx)
 }
@@ -522,7 +525,7 @@ func (client *DatabaseClient) GetUserModelsReverse(txn db.Transaction, userID []
 // ==========================
 // Secondary Model Iteration operations
 // ==========================
-func (client *DatabaseClient) SetModelIteration(txn db.Transaction, modelID Digest, index uint64, iteration *ModelIteration) error {
+func (client *DatabaseClient) SetModelIteration(txn db.Transaction, modelID db.Digest, index uint64, iteration *ModelIteration) error {
 	ctx, key := client.getKeyForSecondaryModelIteration(modelID.Bytes(), index)
 	iterationBytes, err := json.Marshal(iteration)
 	if err != nil {
@@ -531,7 +534,7 @@ func (client *DatabaseClient) SetModelIteration(txn db.Transaction, modelID Dige
 	return txn.Set(key, iterationBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteModelIteration(txn db.Transaction, modelID Digest, index uint64) error {
+func (client *DatabaseClient) DeleteModelIteration(txn db.Transaction, modelID db.Digest, index uint64) error {
 	ctx, key := client.getKeyForSecondaryModelIteration(modelID.Bytes(), index)
 	return txn.Delete(key, ctx)
 }

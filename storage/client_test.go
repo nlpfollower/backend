@@ -24,7 +24,7 @@ func TestGetUserSpacesReverse(t *testing.T) {
 	require.NoError(t, client.Setup())
 	defer client.Close()
 
-	userID := NewDigest([]byte("user1"))
+	userID := db.NewDigest([]byte("user1"))
 	spaces := createTestSpaces(t, client, userID, 10)
 
 	var result []*Space
@@ -45,7 +45,7 @@ func TestGetSpaceThreadsReverse(t *testing.T) {
 	require.NoError(t, client.Setup())
 	defer client.Close()
 
-	spaceID := NewDigest([]byte("space1"))
+	spaceID := db.NewDigest([]byte("space1"))
 	threads := createTestThreads(t, client, spaceID, 10)
 
 	var result []*Thread
@@ -66,7 +66,7 @@ func TestGetThreadMessagesReverse(t *testing.T) {
 	require.NoError(t, client.Setup())
 	defer client.Close()
 
-	threadID := NewDigest([]byte("thread1"))
+	threadID := db.NewDigest([]byte("thread1"))
 	messages := createTestMessages(t, client, threadID, 10)
 
 	var result []*CompoundMessage
@@ -87,7 +87,7 @@ func TestGetUserModelsReverse(t *testing.T) {
 	require.NoError(t, client.Setup())
 	defer client.Close()
 
-	userID := NewDigest([]byte("user1"))
+	userID := db.NewDigest([]byte("user1"))
 	models := createTestModels(t, client, userID, 10)
 
 	var result []*ModelInfo
@@ -108,7 +108,7 @@ func TestGetModelIterations(t *testing.T) {
 	require.NoError(t, client.Setup())
 	defer client.Close()
 
-	modelID := NewDigest([]byte("model1"))
+	modelID := db.NewDigest([]byte("model1"))
 	iterations := createTestModelIterations(t, client, modelID, 10)
 
 	var result []*ModelIteration
@@ -135,10 +135,10 @@ func TestSecondaryIndexes(t *testing.T) {
 	require.NoError(t, client.Setup())
 	defer client.Close()
 
-	userID := NewDigest([]byte("user1"))
-	spaceID := NewDigest([]byte("space1"))
-	threadID := NewDigest([]byte("thread1"))
-	modelID := NewDigest([]byte("model1"))
+	userID := db.NewDigest([]byte("user1"))
+	spaceID := db.NewDigest([]byte("space1"))
+	threadID := db.NewDigest([]byte("thread1"))
+	modelID := db.NewDigest([]byte("model1"))
 
 	// Create test data
 	spaces := createTestSpaces(t, client, userID, 5)
@@ -277,12 +277,12 @@ func TestSecondaryIndexes(t *testing.T) {
 
 // Helper functions
 
-func createTestSpaces(t *testing.T, client *DatabaseClient, userID Digest, count int) []*Space {
+func createTestSpaces(t *testing.T, client *DatabaseClient, userID db.Digest, count int) []*Space {
 	spaces := make([]*Space, count)
 	require.NoError(t, client.Update(func(txn db.Transaction) error {
 		for i := 0; i < count; i++ {
 			space := &Space{
-				ID:          NewDigest([]byte(fmt.Sprintf("space%d", i))),
+				ID:          db.NewDigest([]byte(fmt.Sprintf("space%d", i))),
 				UserID:      userID,
 				Name:        fmt.Sprintf("Space %d", i),
 				Description: fmt.Sprintf("Description for Space %d", i),
@@ -300,12 +300,12 @@ func createTestSpaces(t *testing.T, client *DatabaseClient, userID Digest, count
 	return spaces
 }
 
-func createTestThreads(t *testing.T, client *DatabaseClient, spaceID Digest, count int) []*Thread {
+func createTestThreads(t *testing.T, client *DatabaseClient, spaceID db.Digest, count int) []*Thread {
 	threads := make([]*Thread, count)
 	require.NoError(t, client.Update(func(txn db.Transaction) error {
 		for i := 0; i < count; i++ {
 			thread := &Thread{
-				ID:        NewDigest([]byte(fmt.Sprintf("thread%d", i))),
+				ID:        db.NewDigest([]byte(fmt.Sprintf("thread%d", i))),
 				SpaceID:   spaceID,
 				Title:     fmt.Sprintf("Thread %d", i),
 				CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
@@ -322,12 +322,12 @@ func createTestThreads(t *testing.T, client *DatabaseClient, spaceID Digest, cou
 	return threads
 }
 
-func createTestMessages(t *testing.T, client *DatabaseClient, threadID Digest, count int) []*CompoundMessage {
+func createTestMessages(t *testing.T, client *DatabaseClient, threadID db.Digest, count int) []*CompoundMessage {
 	messages := make([]*CompoundMessage, count)
 	require.NoError(t, client.Update(func(txn db.Transaction) error {
 		for i := 0; i < count; i++ {
 			message := &CompoundMessage{
-				ID:        NewDigest([]byte(fmt.Sprintf("message%d", i))),
+				ID:        db.NewDigest([]byte(fmt.Sprintf("message%d", i))),
 				ThreadID:  threadID,
 				Messages:  []string{fmt.Sprintf("Message %d content", i)},
 				Author:    "TestUser",
@@ -345,12 +345,12 @@ func createTestMessages(t *testing.T, client *DatabaseClient, threadID Digest, c
 	return messages
 }
 
-func createTestModels(t *testing.T, client *DatabaseClient, userID Digest, count int) []*ModelInfo {
+func createTestModels(t *testing.T, client *DatabaseClient, userID db.Digest, count int) []*ModelInfo {
 	models := make([]*ModelInfo, count)
 	require.NoError(t, client.Update(func(txn db.Transaction) error {
 		for i := 0; i < count; i++ {
 			model := &ModelInfo{
-				ID:        NewDigest([]byte(fmt.Sprintf("model%d", i))),
+				ID:        db.NewDigest([]byte(fmt.Sprintf("model%d", i))),
 				UserID:    userID,
 				Name:      fmt.Sprintf("Model %d", i),
 				CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
@@ -367,12 +367,12 @@ func createTestModels(t *testing.T, client *DatabaseClient, userID Digest, count
 	return models
 }
 
-func createTestModelIterations(t *testing.T, client *DatabaseClient, modelID Digest, count int) []*ModelIteration {
+func createTestModelIterations(t *testing.T, client *DatabaseClient, modelID db.Digest, count int) []*ModelIteration {
 	iterations := make([]*ModelIteration, count)
 	require.NoError(t, client.Update(func(txn db.Transaction) error {
 		for i := 0; i < count; i++ {
 			iteration := &ModelIteration{
-				ID:          NewDigest([]byte(fmt.Sprintf("iteration%d", i))),
+				ID:          db.NewDigest([]byte(fmt.Sprintf("iteration%d", i))),
 				ModelID:     modelID,
 				Description: fmt.Sprintf("Iteration %d", i),
 				CreatedAt:   time.Now().Add(time.Duration(i) * time.Minute),

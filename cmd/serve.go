@@ -9,21 +9,25 @@ import (
 )
 
 func NewServeCommand() *cobra.Command {
+	var nexusPort int
+
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the chat server",
 		Long:  `Start the DeltaMind chat server`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := getConfig(cmd)
-			return serve(cfg.DBPath)
+			return serve(cfg.DBPath, nexusPort)
 		},
 	}
+
+	cmd.Flags().IntVar(&nexusPort, "nexus-port", 8081, "Port for the Nexus server")
 
 	return cmd
 }
 
-func serve(dbPath string) error {
-	srv, err := api.NewServer(dbPath)
+func serve(dbPath string, nexusPort int) error {
+	srv, err := api.NewServer(dbPath, nexusPort)
 	if err != nil {
 		return fmt.Errorf("error creating server: %v", err)
 	}

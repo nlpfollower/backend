@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/nlpfollower/deltamind/backend/api"
 	"github.com/nlpfollower/deltamind/backend/storage"
+	"github.com/nlpfollower/deltamind/database/db"
 	"github.com/spf13/cobra"
 )
 
@@ -35,9 +36,14 @@ func deleteUser(dbPath, email string) error {
 	}
 	defer dbManager.Close()
 
-	userID := storage.NewDigest(api.GetUserIDFromEmail(email))
-	if err := dbManager.DeleteUser(userID); err != nil {
-		return fmt.Errorf("error deleting user: %v", err)
+	userID := db.NewDigest(api.GetUserIDFromEmail(email))
+	if err := dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		if err := txn.DeleteUser(userID); err != nil {
+			return fmt.Errorf("error deleting user: %v", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	fmt.Printf("User with email %s has been successfully deleted.\n", email)

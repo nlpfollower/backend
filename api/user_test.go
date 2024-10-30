@@ -41,7 +41,7 @@ func TestSignUpAndSignIn(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected status code: 401")
 
-	// Test CreateSpace with valid AuthToken to verify AuthToken functionality
+	// Test SetSpace with valid AuthToken to verify AuthToken functionality
 	createSpaceReq := CreateSpaceRequest{
 		Name:        "Test Space",
 		Description: "A test space",

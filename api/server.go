@@ -12,16 +12,19 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/nlpfollower/deltamind/backend/storage"
+	"golang.org/x/net/websocket"
 )
 
 type Server struct {
-	router    *mux.Router
-	dbManager *storage.DatabaseManager
-	apiRouter *APIRouter
-	httpSrv   *http.Server
+	router           *mux.Router
+	dbManager        *storage.DatabaseManager
+	apiRouter        *APIRouter
+	httpSrv          *http.Server
+	nexusClient      *NexusClient
+	webSocketHandler *WebSocketHandler
 }
 
-func NewServer(dbPath string) (*Server, error) {
+func NewServer(dbPath string, nexusPort int) (*Server, error) {
 	dbManager, err := storage.NewDatabaseManager(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("error creating database manager: %v", err)
@@ -30,18 +33,30 @@ func NewServer(dbPath string) (*Server, error) {
 		return nil, fmt.Errorf("error setting up database: %v", err)
 	}
 
+	nexusClient := NewNexusClient(nexusPort)
+
 	s := &Server{
-		router:    mux.NewRouter(),
-		dbManager: dbManager,
-		apiRouter: NewAPIRouter(dbManager),
+		router:      mux.NewRouter(),
+		dbManager:   dbManager,
+		apiRouter:   NewAPIRouter(dbManager),
+		nexusClient: nexusClient,
 	}
 
+	s.webSocketHandler = NewWebSocketHandler(nexusClient, s.dbManager)
+
 	s.apiRouter.SetupRoutes(s.router)
+	s.setupWebSocket()
 
 	return s, nil
 }
 
+func (s *Server) setupWebSocket() {
+	s.router.Handle("/ws", websocket.Handler(s.webSocketHandler.HandleWebSocket))
+}
+
 func (s *Server) Start() error {
+	s.nexusClient.Start()
+
 	s.httpSrv = &http.Server{
 		Addr:    ":8080",
 		Handler: s.router,
@@ -66,6 +81,8 @@ func (s *Server) waitForShutdown() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	s.nexusClient.Stop()
 
 	if err := s.httpSrv.Shutdown(ctx); err != nil {
 		log.Printf("Error during server shutdown: %v", err)

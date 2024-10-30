@@ -22,10 +22,13 @@ func (router *APIRouter) SetupRoutes(mux *mux.Router) {
 	mux.HandleFunc("/api/v0/create-space", router.CreateSpace).Methods("POST")
 	mux.HandleFunc("/api/v0/get-spaces", router.GetSpaces).Methods("POST")
 	mux.HandleFunc("/api/v0/delete-space", router.DeleteSpace).Methods("POST")
+	mux.HandleFunc("/api/v0/update-space", router.UpdateSpace).Methods("POST")
 
 	// Thread routes
 	mux.HandleFunc("/api/v0/create-thread", router.CreateThread).Methods("POST")
 	mux.HandleFunc("/api/v0/get-threads", router.GetThreads).Methods("POST")
+	mux.HandleFunc("/api/v0/delete-thread", router.DeleteThread).Methods("POST")
+	mux.HandleFunc("/api/v0/update-thread", router.UpdateThread).Methods("POST")
 
 	// Message routes
 	mux.HandleFunc("/api/v0/create-message", router.CreateMessage).Methods("POST")

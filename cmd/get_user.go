@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/nlpfollower/deltamind/backend/api"
 	"github.com/nlpfollower/deltamind/backend/storage"
+	"github.com/nlpfollower/deltamind/database/db"
 	"github.com/spf13/cobra"
 )
 
@@ -36,11 +37,17 @@ func getUser(dbPath, email string) error {
 	}
 	defer dbManager.Close()
 
-	userID := storage.NewDigest(api.GetUserIDFromEmail(email))
-
-	user, err := dbManager.GetUser(userID)
-	if err != nil {
-		return fmt.Errorf("error retrieving user: %v", err)
+	userID := db.NewDigest(api.GetUserIDFromEmail(email))
+	var user *storage.User
+	if err := dbManager.View(func(txn *storage.DatabaseTransaction) error {
+		var err error
+		user, err = txn.GetUser(userID)
+		if err != nil {
+			return fmt.Errorf("error retrieving user: %v", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	if user == nil {
