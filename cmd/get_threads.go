@@ -49,7 +49,9 @@ func getThreads(dbPath, email, spaceIDStr string, pageSize int, maxTimestamp uin
 	}
 	defer dbManager.Close()
 
-	apiRouter := api.NewAPIRouter(dbManager)
+	nexusClient := api.NewNexusClient(8081)
+
+	apiRouter := api.NewAPIRouter(dbManager, nexusClient)
 
 	userID := db.NewDigest(api.GetUserIDFromEmail(email))
 	authToken, err := api.GenerateAuthToken(userID.String())

@@ -45,8 +45,10 @@ func addUser(dbPath, email, username, password string) error {
 	}
 	defer dbManager.Close()
 
+	nexusClient := api.NewNexusClient(8081)
+	
 	// Create a new API router
-	apiRouter := api.NewAPIRouter(dbManager)
+	apiRouter := api.NewAPIRouter(dbManager, nexusClient)
 
 	// Create a mock HTTP request
 	passwordHash := api.HashPassword(password)

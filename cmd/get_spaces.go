@@ -45,7 +45,9 @@ func getSpaces(dbPath, email string, pageSize int, maxTimestamp uint64) error {
 	}
 	defer dbManager.Close()
 
-	apiRouter := api.NewAPIRouter(dbManager)
+	nexusClient := api.NewNexusClient(8081)
+
+	apiRouter := api.NewAPIRouter(dbManager, nexusClient)
 
 	userID := db.NewDigest(api.GetUserIDFromEmail(email))
 	authToken, err := api.GenerateAuthToken(userID.String())
