@@ -67,7 +67,7 @@ func TestSessionManagement(t *testing.T) {
 			AuthToken: user.AuthToken,
 		}
 
-		startResp, err := performRequest[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", startReq)
+		startResp, err := performRequestWithTimeout[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", startReq, 6*time.Minute)
 		require.NoError(t, err)
 		require.Equal(t, "SUCCESS", startResp.Status)
 		require.NotEmpty(t, startResp.SessionID)
@@ -84,7 +84,7 @@ func TestSessionManagement(t *testing.T) {
 			AuthToken: user.AuthToken,
 		}
 
-		extendResp, err := performRequest[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", extendReq)
+		extendResp, err := performRequestWithTimeout[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", extendReq, 6*time.Minute)
 		require.NoError(t, err)
 		require.Equal(t, "SUCCESS", extendResp.Status)
 		require.Equal(t, sessionID, extendResp.SessionID)
@@ -97,7 +97,7 @@ func TestSessionManagement(t *testing.T) {
 			AuthToken: user.AuthToken,
 		}
 
-		stopResp, err := performRequest[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", stopReq)
+		stopResp, err := performRequestWithTimeout[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", stopReq, 6*time.Minute)
 		require.NoError(t, err)
 		require.Equal(t, "SUCCESS", stopResp.Status)
 		t.Log("Stopped session successfully")

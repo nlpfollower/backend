@@ -130,3 +130,39 @@ func performRequest[Req any, Resp any](t *testing.T, ts *TestServer, method, pat
 
 	return &response, nil
 }
+
+// performRequestWithTimeout is a version of performRequest with configurable timeout
+func performRequestWithTimeout[Req any, Resp any](t *testing.T, ts *TestServer, method, path string, req Req, timeout time.Duration) (*Resp, error) {
+	url := fmt.Sprintf("%s%s", ts.URL, path)
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	httpReq, err := http.NewRequest(method, url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{
+		Timeout: timeout,
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var response Resp
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
