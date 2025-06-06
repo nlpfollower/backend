@@ -82,7 +82,7 @@ func TestWebSocketHandler(t *testing.T) {
 				ID:        lastMessage.ID,
 				MessageID: 0,
 			},
-			ModelID:   core.APIModelToDigest(core.APIModelIDGPT4),
+			ModelID:   "gpt-4",
 			AuthToken: user.AuthToken,
 		}
 		err = sendTypedWSMessage(ws, inferReq)
@@ -139,7 +139,7 @@ func TestWebSocketHandler(t *testing.T) {
 						ID:        lastMessage.ID,
 						MessageID: 0,
 					},
-					ModelID:   core.APIModelToDigest(core.APIModelIDGPT4),
+					ModelID:   "gpt-4",
 					AuthToken: user.AuthToken,
 				}
 				err = sendTypedWSMessage(ws, inferReq)
@@ -193,7 +193,7 @@ func TestWebSocketHandler(t *testing.T) {
 					ID:        lastMessage.ID,
 					MessageID: 0,
 				},
-				ModelID:   core.APIModelToDigest(core.APIModelIDGPT4),
+				ModelID:   "gpt-4",
 				AuthToken: user.AuthToken,
 			}
 			err = sendTypedWSMessage(ws, inferReq)
@@ -258,7 +258,7 @@ func TestWebSocketHandler(t *testing.T) {
 				ID:        invalidMsgID,
 				MessageID: 0,
 			},
-			ModelID:   core.APIModelToDigest(core.APIModelIDGPT4),
+			ModelID:   "gpt-4",
 			AuthToken: user.AuthToken,
 		}
 		err = sendTypedWSMessage(ws, inferReq)

@@ -159,7 +159,7 @@ func (nc *NexusClient) handleOutboundMessages() {
 	}
 }
 
-func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID db.Digest, messages []core.Message) (<-chan *core.WrappedResponse, error) {
+func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID string, messages []core.Message) (<-chan *core.WrappedResponse, error) {
 	responseChan := make(chan *core.WrappedResponse, 10) // Buffer for streaming responses
 	requestID := db.NewDigest([]byte(fmt.Sprintf("req-%d", time.Now().UnixNano())))
 
@@ -180,4 +180,39 @@ func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID db.Digest, mes
 
 	nc.requestQueue <- wrappedReq
 	return responseChan, nil
+}
+
+func (nc *NexusClient) EnqueueSession(userID db.Digest, sessionReq *core.SessionRequest) (<-chan *core.WrappedResponse, error) {
+	responseChan := make(chan *core.WrappedResponse, 1) // Buffer for single response
+	requestID := db.NewDigest([]byte(fmt.Sprintf("session-req-%d", time.Now().UnixNano())))
+
+	wrappedReq, err := core.NewWrappedRequest(requestID, sessionReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	nc.requestMapMu.Lock()
+	nc.requestMap[requestID.String()] = responseChan
+	nc.requestMapMu.Unlock()
+
+	nc.requestQueue <- wrappedReq
+	return responseChan, nil
+}
+
+// Update isResponseFinal to handle session responses
+func (nc *NexusClient) isResponseFinal(response *core.WrappedResponse) bool {
+	// Try inference response first
+	var inferResp core.InferenceResponse
+	if err := json.Unmarshal(response.Data, &inferResp); err == nil {
+		return inferResp.Type == core.ResponseTypeFinal
+	}
+
+	// Session responses are always final
+	var sessionResp core.SessionResponse
+	if err := json.Unmarshal(response.Data, &sessionResp); err == nil {
+		return true
+	}
+
+	// Default to true for unknown types
+	return true
 }

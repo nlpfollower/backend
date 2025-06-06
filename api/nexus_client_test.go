@@ -139,7 +139,7 @@ func TestNexusClient(t *testing.T) {
 
 	t.Run("Basic Inference Request", func(t *testing.T) {
 		userID := db.NewDigest([]byte("test-user"))
-		modelID := core.APIModelToDigest(core.APIModelIDGPT4)
+		modelID := "gpt-4"
 		messages := []core.Message{
 			{Role: "user", Content: "Hello"},
 		}
@@ -185,7 +185,7 @@ func TestNexusClient(t *testing.T) {
 
 		// Try another request
 		userID := db.NewDigest([]byte("test-user"))
-		modelID := core.APIModelToDigest(core.APIModelIDGPT4)
+		modelID := "gpt-4"
 		messages := []core.Message{
 			{Role: "user", Content: "After reconnect"},
 		}

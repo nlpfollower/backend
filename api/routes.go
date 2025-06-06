@@ -6,11 +6,15 @@ import (
 )
 
 type APIRouter struct {
-	dbManager *storage.DatabaseManager
+	dbManager   *storage.DatabaseManager
+	nexusClient *NexusClient
 }
 
-func NewAPIRouter(dbManager *storage.DatabaseManager) *APIRouter {
-	return &APIRouter{dbManager: dbManager}
+func NewAPIRouter(dbManager *storage.DatabaseManager, nexusClient *NexusClient) *APIRouter {
+	return &APIRouter{
+		dbManager:   dbManager,
+		nexusClient: nexusClient,
+	}
 }
 
 func (router *APIRouter) SetupRoutes(mux *mux.Router) {
@@ -42,4 +46,7 @@ func (router *APIRouter) SetupRoutes(mux *mux.Router) {
 	// Model Iteration routes
 	mux.HandleFunc("/api/v0/create-model-iteration", router.CreateModelIteration).Methods("POST")
 	mux.HandleFunc("/api/v0/get-model-iterations", router.GetModelIterations).Methods("POST")
+
+	// Session management route (ADD THIS)
+	mux.HandleFunc("/api/v0/manage-session", router.ManageSession).Methods("POST")
 }

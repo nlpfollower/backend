@@ -38,7 +38,7 @@ func NewServer(dbPath string, nexusPort int) (*Server, error) {
 	s := &Server{
 		router:      mux.NewRouter(),
 		dbManager:   dbManager,
-		apiRouter:   NewAPIRouter(dbManager),
+		apiRouter:   NewAPIRouter(dbManager, nexusClient), // Pass nexusClient here
 		nexusClient: nexusClient,
 	}
 
