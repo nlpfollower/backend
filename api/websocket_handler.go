@@ -464,7 +464,7 @@ func (wsh *WebSocketHandler) handleSessionRequest(ws *websocket.Conn, userID str
 		}
 		sendTypedWSResponse(ws, wsResp)
 
-	case <-time.After(30 * time.Second):
+	case <-time.After(5 * time.Minute):
 		resp := WSSessionResponse{
 			Status: "error",
 			Error:  "Session request timeout",
