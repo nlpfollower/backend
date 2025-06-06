@@ -124,14 +124,6 @@ func (nc *NexusClient) routeResponse(response *core.WrappedResponse) {
 	}
 }
 
-func (nc *NexusClient) isResponseFinal(response *core.WrappedResponse) bool {
-	var inferResp core.InferenceResponse
-	if err := json.Unmarshal(response.Data, &inferResp); err != nil {
-		return false
-	}
-	return inferResp.Type == core.ResponseTypeFinal
-}
-
 func (nc *NexusClient) handleOutboundMessages() {
 	for {
 		select {
