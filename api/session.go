@@ -54,26 +54,12 @@ func (router *APIRouter) ManageSession(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// Generate request ID
-	requestIDBytes, err := GenerateRandomBytes(32)
-	if err != nil {
-		http.Error(w, "Failed to generate request ID", http.StatusInternalServerError)
-		return
-	}
-	requestID := db.NewDigest(requestIDBytes)
-
 	// Create nexus session request
 	nexusSessionReq := &core.SessionRequest{
 		Action:    core.SessionAction(sessionReq.Action),
 		ModelID:   sessionReq.ModelID,
 		SessionID: sessionReq.SessionID,
 		Duration:  sessionReq.Duration,
-	}
-
-	wrappedReq, err := core.NewWrappedRequest(requestID, nexusSessionReq)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create request: %v", err), http.StatusInternalServerError)
-		return
 	}
 
 	// Send to nexus and wait for response
