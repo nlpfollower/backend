@@ -2,13 +2,10 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/nlpfollower/deltamind/backend/storage"
-	"github.com/nlpfollower/deltamind/nexus/core"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/websocket"
-	"net"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -16,127 +13,23 @@ import (
 	"time"
 )
 
-// MockNexusServerWithSession extends MockNexusServer to handle session requests
-type MockNexusServerWithSession struct {
-	*MockNexusServer
-}
-
-func NewMockNexusServerWithSession(port int) (*MockNexusServerWithSession, error) {
-	base, err := NewMockNexusServer(port)
-	if err != nil {
-		return nil, err
-	}
-	return &MockNexusServerWithSession{MockNexusServer: base}, nil
-}
-
-func (s *MockNexusServerWithSession) handleConnection(conn net.Conn) {
-	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
-
-	for {
-		var req core.WrappedRequest
-		err := decoder.Decode(&req)
-		if err != nil {
-			return
-		}
-
-		switch req.Type {
-		case core.RequestTypeSession:
-			// Handle session request
-			var sessionReq core.SessionRequest
-			if err := json.Unmarshal(req.Data, &sessionReq); err != nil {
-				continue
-			}
-
-			// Generate mock session response based on action
-			var sessionResp *core.SessionResponse
-
-			switch sessionReq.Action {
-			case core.SessionActionStart:
-				sessionResp = &core.SessionResponse{
-					Status:    core.ResponseStatusSuccess,
-					SessionID: fmt.Sprintf("session-%d", time.Now().Unix()),
-					Endpoint:  "http://192.168.1.100:5000",
-				}
-			case core.SessionActionStop:
-				sessionResp = &core.SessionResponse{
-					Status:    core.ResponseStatusSuccess,
-					SessionID: sessionReq.SessionID,
-				}
-			case core.SessionActionExtend:
-				sessionResp = &core.SessionResponse{
-					Status:    core.ResponseStatusSuccess,
-					SessionID: sessionReq.SessionID,
-					Endpoint:  "http://192.168.1.100:5000",
-				}
-			}
-
-			// Send session response
-			wrapped, err := core.NewWrappedResponse(req.RequestID, sessionResp)
-			if err != nil {
-				continue
-			}
-			if err := encoder.Encode(wrapped); err != nil {
-				return
-			}
-
-		case core.RequestTypeInference:
-			// Handle inference request
-			var inferReq core.InferenceRequest
-			if err := json.Unmarshal(req.Data, &inferReq); err != nil {
-				continue
-			}
-
-			// Generate streaming responses
-			partial := &core.InferenceResponse{
-				Type:    core.ResponseTypePartial,
-				Content: fmt.Sprintf("Partial response for request %s", req.RequestID),
-				Status:  core.ResponseStatusSuccess,
-			}
-
-			final := &core.InferenceResponse{
-				Type:    core.ResponseTypeFinal,
-				Content: fmt.Sprintf("Final response for request %s", req.RequestID),
-				Status:  core.ResponseStatusSuccess,
-			}
-
-			// Send partial response
-			partialWrapped, err := core.NewWrappedResponse(req.RequestID, partial)
-			if err != nil {
-				continue
-			}
-			if err := encoder.Encode(partialWrapped); err != nil {
-				return
-			}
-
-			// Small delay to simulate processing
-			time.Sleep(50 * time.Millisecond)
-
-			// Send final response
-			finalWrapped, err := core.NewWrappedResponse(req.RequestID, final)
-			if err != nil {
-				continue
-			}
-			if err := encoder.Encode(finalWrapped); err != nil {
-				return
-			}
-		}
-	}
-}
-
 func TestSessionManagement(t *testing.T) {
-	// Create a custom test server with session support
+	// Check if we should use real Nexus server
+	useRealNexus := os.Getenv("USE_REAL_NEXUS") == "true"
+	nexusPort := 8081 // Default Nexus port
+
+	if useRealNexus {
+		t.Log("Using real Nexus server on port", nexusPort)
+		// Optionally check if Nexus is running
+		// You could add a health check here
+	} else {
+		t.Skip("Skipping session test. Set USE_REAL_NEXUS=true and ensure Nexus is running on port 8081")
+	}
+
+	// Create test server that connects to real Nexus
 	tempDir, err := os.MkdirTemp("", "deltamind-session-test-")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
-
-	// Start the mock Nexus server with session support
-	mockNexus, err := NewMockNexusServerWithSession(0)
-	require.NoError(t, err)
-	defer mockNexus.Close()
-
-	// Get the assigned port from the listener's address
-	nexusPort := mockNexus.listener.Addr().(*net.TCPAddr).Port
 
 	server, err := NewServer(tempDir, nexusPort)
 	require.NoError(t, err)
@@ -153,15 +46,14 @@ func TestSessionManagement(t *testing.T) {
 	wsURL := url.URL{Scheme: "ws", Host: httpServer.Listener.Addr().String(), Path: "/ws"}
 
 	ts := &TestServer{
-		Server:          server,
-		URL:             httpServer.URL,
-		WsURL:           wsURL.String(),
-		MockNexusServer: mockNexus.MockNexusServer,
-		httpServer:      httpServer,
+		Server:     server,
+		URL:        httpServer.URL,
+		WsURL:      wsURL.String(),
+		httpServer: httpServer,
 	}
 
 	// Wait for the NexusClient to establish a connection
-	require.NoError(t, ts.waitForNexusConnection(5*time.Second))
+	require.NoError(t, waitForNexusConnection(server.nexusClient, 5*time.Second))
 
 	t.Run("HTTP Session Management", func(t *testing.T) {
 		// Create test user
@@ -182,6 +74,7 @@ func TestSessionManagement(t *testing.T) {
 		require.NotEmpty(t, startResp.Endpoint)
 
 		sessionID := startResp.SessionID
+		t.Logf("Started session: %s at endpoint: %s", sessionID, startResp.Endpoint)
 
 		// Test EXTEND session
 		extendReq := SessionRequest{
@@ -195,6 +88,7 @@ func TestSessionManagement(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "SUCCESS", extendResp.Status)
 		require.Equal(t, sessionID, extendResp.SessionID)
+		t.Log("Extended session successfully")
 
 		// Test STOP session
 		stopReq := SessionRequest{
@@ -206,6 +100,7 @@ func TestSessionManagement(t *testing.T) {
 		stopResp, err := performRequest[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", stopReq)
 		require.NoError(t, err)
 		require.Equal(t, "SUCCESS", stopResp.Status)
+		t.Log("Stopped session successfully")
 	})
 
 	t.Run("WebSocket Session Management", func(t *testing.T) {
@@ -245,6 +140,7 @@ func TestSessionManagement(t *testing.T) {
 		require.Equal(t, "SUCCESS", sessionResp.Status)
 		require.NotEmpty(t, sessionResp.SessionID)
 		require.NotEmpty(t, sessionResp.Endpoint)
+		t.Logf("WebSocket session started: %s at endpoint: %s", sessionResp.SessionID, sessionResp.Endpoint)
 	})
 
 	t.Run("Session and Inference Integration", func(t *testing.T) {
@@ -275,7 +171,7 @@ func TestSessionManagement(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "success", handshakeResp.Status)
 
-		// Start session
+		// Start session (optional - can also just send inference directly)
 		sessionReq := WSSessionRequest{
 			Action:    SessionActionStart,
 			ModelID:   "llama-8b",
@@ -288,8 +184,9 @@ func TestSessionManagement(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "SUCCESS", sessionResp.Status)
 		sessionID := sessionResp.SessionID
+		t.Logf("Session started: %s", sessionID)
 
-		// Now send inference request
+		// Now send inference request using API model (GPT-4)
 		inferReq := WSInferenceRequest{
 			LastMessageID: &storage.CompoundMessageID{
 				ID:        lastMessage.ID,
@@ -301,11 +198,26 @@ func TestSessionManagement(t *testing.T) {
 		err = sendTypedWSMessage(ws, inferReq)
 		require.NoError(t, err)
 
-		// Read inference response
-		inferResp, err := receiveTypedWSMessage[WSInferenceResponse](ws)
-		require.NoError(t, err)
-		require.Equal(t, string(core.ResponseStatusSuccess), inferResp.Status)
-		require.NotEmpty(t, inferResp.Content)
+		// Read inference responses (might be multiple for streaming)
+		var receivedContent string
+		for {
+			inferResp, err := receiveTypedWSMessage[WSInferenceResponse](ws)
+			require.NoError(t, err)
+
+			if inferResp.Status == "error" {
+				t.Fatalf("Inference error: %s", inferResp.Content)
+			}
+
+			receivedContent += inferResp.Content
+			t.Logf("Received inference response (type=%s): %s", inferResp.Type, inferResp.Content)
+
+			if inferResp.Type == "FINAL" {
+				break
+			}
+		}
+
+		require.NotEmpty(t, receivedContent)
+		t.Logf("Full inference response: %s", receivedContent)
 
 		// Stop session
 		stopReq := WSSessionRequest{
@@ -319,5 +231,22 @@ func TestSessionManagement(t *testing.T) {
 		stopResp, err := receiveTypedWSMessage[WSSessionResponse](ws)
 		require.NoError(t, err)
 		require.Equal(t, "SUCCESS", stopResp.Status)
+		t.Log("Session stopped successfully")
 	})
+}
+
+// Helper function to wait for nexus connection
+func waitForNexusConnection(client *NexusClient, timeout time.Duration) error {
+	start := time.Now()
+	for {
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timeout waiting for Nexus connection")
+		}
+
+		if client.isConnected {
+			return nil
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
 }
