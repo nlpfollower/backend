@@ -84,6 +84,31 @@ func (i WSInferenceResponse) GetWSMessageType() WSMessageType {
 	return WSMessageTypeInference
 }
 
+// WebSocket session types
+type WSSessionRequest struct {
+	Action    string    `json:"action"`
+	ModelID   string    `json:"model_id,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	Duration  string    `json:"duration,omitempty"`
+	AuthToken AuthToken `json:"auth_token"`
+}
+
+func (s WSSessionRequest) GetWSMessageType() WSMessageType {
+	return WSMessageTypeSession
+}
+
+type WSSessionResponse struct {
+	Status    string `json:"status"`
+	SessionID string `json:"session_id,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	State     string `json:"state,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+func (s WSSessionResponse) GetWSMessageType() WSMessageType {
+	return WSMessageTypeSession
+}
+
 func NewWebSocketHandler(nexusClient *NexusClient, dbManager *storage.DatabaseManager) *WebSocketHandler {
 	return &WebSocketHandler{
 		nexusClient:     nexusClient,
@@ -412,16 +437,6 @@ func (wsh *WebSocketHandler) sendResponseToClient(userID string, resp WSInferenc
 
 // Add this new method to WebSocketHandler:
 func (wsh *WebSocketHandler) handleSessionRequest(ws *websocket.Conn, userID string, req WSSessionRequest) {
-	// Get user ID as digest
-	userIDDigest, err := db.DigestFromString(userID)
-	if err != nil {
-		resp := WSSessionResponse{
-			Status: "error",
-			Error:  "Invalid user ID",
-		}
-		sendTypedWSResponse(ws, resp)
-		return
-	}
 
 	// Create nexus session request
 	nexusSessionReq := &core.SessionRequest{
@@ -432,7 +447,7 @@ func (wsh *WebSocketHandler) handleSessionRequest(ws *websocket.Conn, userID str
 	}
 
 	// Send to nexus
-	responseChan, err := wsh.nexusClient.EnqueueSession(userIDDigest, nexusSessionReq)
+	responseChan, err := wsh.nexusClient.EnqueueSession(nexusSessionReq)
 	if err != nil {
 		resp := WSSessionResponse{
 			Status: "error",
@@ -460,11 +475,12 @@ func (wsh *WebSocketHandler) handleSessionRequest(ws *websocket.Conn, userID str
 			Status:    string(sessionResp.Status),
 			SessionID: sessionResp.SessionID,
 			Endpoint:  sessionResp.Endpoint,
+			State:     sessionResp.State,
 			Error:     sessionResp.Error,
 		}
 		sendTypedWSResponse(ws, wsResp)
 
-	case <-time.After(5 * time.Minute):
+	case <-time.After(30 * time.Second):
 		resp := WSSessionResponse{
 			Status: "error",
 			Error:  "Session request timeout",

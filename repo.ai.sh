@@ -1,1 +1,1 @@
-repopack -o repo.ai.txt --style xml
+repopack -o repo.ai.txt --ignore "storage/**" --style xml

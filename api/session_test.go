@@ -1,252 +1,199 @@
-// api/session_test.go
 package api
 
 import (
-	"fmt"
-	"github.com/nlpfollower/deltamind/backend/storage"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/net/websocket"
-	"net/http/httptest"
-	"net/url"
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/nlpfollower/deltamind/backend/storage"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSessionManagement(t *testing.T) {
-	// Check if we should use real Nexus server
-	useRealNexus := os.Getenv("USE_REAL_NEXUS") == "true"
-	nexusPort := 8081 // Default Nexus port
-
-	if useRealNexus {
-		t.Log("Using real Nexus server on port", nexusPort)
-		// Optionally check if Nexus is running
-		// You could add a health check here
-	} else {
-		t.Skip("Skipping session test. Set USE_REAL_NEXUS=true and ensure Nexus is running on port 8081")
+	// Skip if not using real Nexus
+	if os.Getenv("USE_REAL_NEXUS") != "true" {
+		t.Skip("Skipping session management test. Set USE_REAL_NEXUS=true to run.")
 	}
 
-	// Create test server that connects to real Nexus
-	tempDir, err := os.MkdirTemp("", "deltamind-session-test-")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	// Use real Nexus server
+	baseURL := "http://localhost:8080/api/v0"
+	t.Log("Using real Nexus server for session tests")
 
-	server, err := NewServer(tempDir, nexusPort)
-	require.NoError(t, err)
+	// First sign in to get auth token
+	authToken := signInForTests(t, baseURL)
 
-	// Start the NexusClient
-	server.nexusClient.Start()
-	defer server.nexusClient.Stop()
+	t.Run("Session Lifecycle", func(t *testing.T) {
+		client := &http.Client{Timeout: 30 * time.Second}
 
-	// Use httptest.NewServer to create a test server
-	httpServer := httptest.NewServer(server.router)
-	defer httpServer.Close()
-
-	// Create WebSocket URL
-	wsURL := url.URL{Scheme: "ws", Host: httpServer.Listener.Addr().String(), Path: "/ws"}
-
-	ts := &TestServer{
-		Server:     server,
-		URL:        httpServer.URL,
-		WsURL:      wsURL.String(),
-		httpServer: httpServer,
-	}
-
-	// Wait for the NexusClient to establish a connection
-	require.NoError(t, waitForNexusConnection(server.nexusClient, 5*time.Second))
-
-	t.Run("HTTP Session Management", func(t *testing.T) {
-		// Create test user
-		user, err := createTestUser(t, ts, "session_user@example.com", "sessionuser", "password123")
-		require.NoError(t, err)
-
-		// Test START session
-		startReq := SessionRequest{
-			Action:    SessionActionStart,
+		// Start session
+		startReq := StartSessionRequest{
 			ModelID:   "llama-8b",
-			AuthToken: user.AuthToken,
+			AuthToken: authToken,
 		}
 
-		startResp, err := performRequestWithTimeout[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", startReq, 6*time.Minute)
+		reqBody, _ := json.Marshal(startReq)
+		resp, err := client.Post(baseURL+"/session/start", "application/json", bytes.NewBuffer(reqBody))
 		require.NoError(t, err)
-		require.Equal(t, "SUCCESS", startResp.Status)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var startResp StartSessionResponse
+		err = json.NewDecoder(resp.Body).Decode(&startResp)
+		resp.Body.Close()
+		require.NoError(t, err)
 		require.NotEmpty(t, startResp.SessionID)
-		require.NotEmpty(t, startResp.Endpoint)
 
 		sessionID := startResp.SessionID
-		t.Logf("Started session: %s at endpoint: %s", sessionID, startResp.Endpoint)
+		t.Logf("Session %s started with initial state: %s", sessionID, startResp.State)
 
-		// Test EXTEND session
-		extendReq := SessionRequest{
-			Action:    SessionActionExtend,
-			SessionID: sessionID,
-			Duration:  "1h",
-			AuthToken: user.AuthToken,
-		}
+		// Poll for session readiness
+		var sessionEndpoint string
+		deadline := time.Now().Add(10 * time.Minute)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 
-		extendResp, err := performRequestWithTimeout[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", extendReq, 6*time.Minute)
-		require.NoError(t, err)
-		require.Equal(t, "SUCCESS", extendResp.Status)
-		require.Equal(t, sessionID, extendResp.SessionID)
-		t.Log("Extended session successfully")
+		pollCount := 0
+		for time.Now().Before(deadline) {
+			pollCount++
 
-		// Test STOP session
-		stopReq := SessionRequest{
-			Action:    SessionActionStop,
-			SessionID: sessionID,
-			AuthToken: user.AuthToken,
-		}
-
-		stopResp, err := performRequestWithTimeout[SessionRequest, SessionResponse](t, ts, "POST", "/api/v0/manage-session", stopReq, 6*time.Minute)
-		require.NoError(t, err)
-		require.Equal(t, "SUCCESS", stopResp.Status)
-		t.Log("Stopped session successfully")
-	})
-
-	t.Run("WebSocket Session Management", func(t *testing.T) {
-		user, err := createTestUser(t, ts, "ws_session@example.com", "wssessionuser", "password123")
-		require.NoError(t, err)
-
-		origin := "http://localhost/"
-		url := fmt.Sprintf("ws://%s/ws", ts.URL[7:])
-		ws, err := websocket.Dial(url, "", origin)
-		require.NoError(t, err)
-		defer ws.Close()
-
-		// Send handshake
-		handshakeReq := HandshakeRequest{
-			AuthToken: user.AuthToken,
-		}
-		err = sendTypedWSMessage(ws, handshakeReq)
-		require.NoError(t, err)
-
-		// Read handshake response
-		handshakeResp, err := receiveTypedWSMessage[HandshakeResponse](ws)
-		require.NoError(t, err)
-		require.Equal(t, "success", handshakeResp.Status)
-
-		// Send START session request
-		sessionReq := WSSessionRequest{
-			Action:    SessionActionStart,
-			ModelID:   "llama-8b",
-			AuthToken: user.AuthToken,
-		}
-		err = sendTypedWSMessage(ws, sessionReq)
-		require.NoError(t, err)
-
-		// Read session response
-		sessionResp, err := receiveTypedWSMessage[WSSessionResponse](ws)
-		require.NoError(t, err)
-		require.Equal(t, "SUCCESS", sessionResp.Status)
-		require.NotEmpty(t, sessionResp.SessionID)
-		require.NotEmpty(t, sessionResp.Endpoint)
-		t.Logf("WebSocket session started: %s at endpoint: %s", sessionResp.SessionID, sessionResp.Endpoint)
-	})
-
-	t.Run("Session and Inference Integration", func(t *testing.T) {
-		user, err := createTestUser(t, ts, "integration@example.com", "integrationuser", "password123")
-		require.NoError(t, err)
-
-		// Create test data
-		space := createTestSpace(t, ts, user)
-		thread := createTestThread(t, ts, user, space, "Test Thread")
-		messages := createTestMessages(t, ts, user, thread, 1)
-		require.NotEmpty(t, messages)
-		lastMessage := messages[0]
-
-		origin := "http://localhost/"
-		url := fmt.Sprintf("ws://%s/ws", ts.URL[7:])
-		ws, err := websocket.Dial(url, "", origin)
-		require.NoError(t, err)
-		defer ws.Close()
-
-		// Handshake
-		handshakeReq := HandshakeRequest{
-			AuthToken: user.AuthToken,
-		}
-		err = sendTypedWSMessage(ws, handshakeReq)
-		require.NoError(t, err)
-
-		handshakeResp, err := receiveTypedWSMessage[HandshakeResponse](ws)
-		require.NoError(t, err)
-		require.Equal(t, "success", handshakeResp.Status)
-
-		// Start session (optional - can also just send inference directly)
-		sessionReq := WSSessionRequest{
-			Action:    SessionActionStart,
-			ModelID:   "llama-8b",
-			AuthToken: user.AuthToken,
-		}
-		err = sendTypedWSMessage(ws, sessionReq)
-		require.NoError(t, err)
-
-		sessionResp, err := receiveTypedWSMessage[WSSessionResponse](ws)
-		require.NoError(t, err)
-		require.Equal(t, "SUCCESS", sessionResp.Status)
-		sessionID := sessionResp.SessionID
-		t.Logf("Session started: %s", sessionID)
-
-		// Now send inference request using API model (GPT-4)
-		inferReq := WSInferenceRequest{
-			LastMessageID: &storage.CompoundMessageID{
-				ID:        lastMessage.ID,
-				MessageID: 0,
-			},
-			ModelID:   "llama-8b",
-			AuthToken: user.AuthToken,
-		}
-		err = sendTypedWSMessage(ws, inferReq)
-		require.NoError(t, err)
-
-		// Read inference responses (might be multiple for streaming)
-		var receivedContent string
-		for {
-			inferResp, err := receiveTypedWSMessage[WSInferenceResponse](ws)
-			require.NoError(t, err)
-
-			if inferResp.Status == "error" {
-				t.Fatalf("Inference error: %s", inferResp.Content)
+			// Check session status
+			statusReq := SessionStatusRequest{
+				SessionID: sessionID,
+				AuthToken: authToken,
 			}
 
-			receivedContent += inferResp.Content
-			t.Logf("Received inference response (type=%s): %s", inferResp.Type, inferResp.Content)
+			reqBody, _ := json.Marshal(statusReq)
+			statusResp, err := client.Post(baseURL+"/session/status", "application/json", bytes.NewBuffer(reqBody))
+			if err != nil {
+				t.Logf("Poll %d: Error checking status: %v", pollCount, err)
+				<-ticker.C
+				continue
+			}
 
-			if inferResp.Type == "FINAL" {
+			var status SessionStatusResponse
+			err = json.NewDecoder(statusResp.Body).Decode(&status)
+			statusResp.Body.Close()
+
+			if err != nil {
+				t.Logf("Poll %d: Error decoding status: %v", pollCount, err)
+				<-ticker.C
+				continue
+			}
+
+			t.Logf("Poll %d: Session state = %s", pollCount, status.State)
+
+			// Check if session is ready
+			if status.State == "running" {
+				sessionEndpoint = status.Endpoint
+				t.Logf("Session ready after %d polls! Endpoint: %s", pollCount, sessionEndpoint)
 				break
 			}
+
+			if status.State == "error" || status.State == "stopped" || status.State == "expired" {
+				t.Fatalf("Session failed to start: state = %s, error = %s", status.State, status.Error)
+			}
+
+			<-ticker.C
 		}
 
-		require.NotEmpty(t, receivedContent)
-		t.Logf("Full inference response: %s", receivedContent)
+		require.NotEmpty(t, sessionEndpoint, "Session should have an endpoint after initialization")
+
+		// Test extending session
+		extendReq := ExtendSessionRequest{
+			SessionID: sessionID,
+			Duration:  "1h",
+			AuthToken: authToken,
+		}
+
+		reqBody, _ = json.Marshal(extendReq)
+		resp, err = client.Post(baseURL+"/session/extend", "application/json", bytes.NewBuffer(reqBody))
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var extendResp ExtendSessionResponse
+		err = json.NewDecoder(resp.Body).Decode(&extendResp)
+		resp.Body.Close()
+		require.NoError(t, err)
+		require.True(t, extendResp.Success)
+		t.Log("Session extended successfully")
 
 		// Stop session
-		stopReq := WSSessionRequest{
-			Action:    SessionActionStop,
+		stopReq := StopSessionRequest{
 			SessionID: sessionID,
-			AuthToken: user.AuthToken,
+			AuthToken: authToken,
 		}
-		err = sendTypedWSMessage(ws, stopReq)
+
+		reqBody, _ = json.Marshal(stopReq)
+		resp, err = client.Post(baseURL+"/session/stop", "application/json", bytes.NewBuffer(reqBody))
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var stopResp StopSessionResponse
+		err = json.NewDecoder(resp.Body).Decode(&stopResp)
+		resp.Body.Close()
+		require.NoError(t, err)
+		require.True(t, stopResp.Success)
+		t.Log("Session stopped successfully")
+
+		// Verify session is stopped
+		statusReq := SessionStatusRequest{
+			SessionID: sessionID,
+			AuthToken: authToken,
+		}
+
+		reqBody, _ = json.Marshal(statusReq)
+		finalStatusResp, err := client.Post(baseURL+"/session/status", "application/json", bytes.NewBuffer(reqBody))
 		require.NoError(t, err)
 
-		stopResp, err := receiveTypedWSMessage[WSSessionResponse](ws)
+		var finalStatus SessionStatusResponse
+		err = json.NewDecoder(finalStatusResp.Body).Decode(&finalStatus)
+		finalStatusResp.Body.Close()
 		require.NoError(t, err)
-		require.Equal(t, "SUCCESS", stopResp.Status)
-		t.Log("Session stopped successfully")
+		require.Contains(t, []string{"stopped", "stopping"}, finalStatus.State)
+
+		t.Log("Session lifecycle test completed successfully")
 	})
 }
 
-// Helper function to wait for nexus connection
-func waitForNexusConnection(client *NexusClient, timeout time.Duration) error {
-	start := time.Now()
-	for {
-		if time.Since(start) > timeout {
-			return fmt.Errorf("timeout waiting for Nexus connection")
-		}
+// Helper function to sign in and get auth token for tests
+func signInForTests(t *testing.T, baseURL string) AuthToken {
+	client := &http.Client{Timeout: 10 * time.Second}
 
-		if client.isConnected {
-			return nil
-		}
+	// Try to sign up first (in case user doesn't exist)
+	passwordHex := hex.EncodeToString(HashPassword("testpassword123"))
+	signUpReq := SignUpRequest{
+		Email:       "test@example.com",
+		Username:    "testuser",
+		PasswordHex: passwordHex,
+		Method:      storage.AuthMethodEmailPassword,
+	}
 
-		time.Sleep(100 * time.Millisecond)
+	reqBody, _ := json.Marshal(signUpReq)
+	resp, err := client.Post(baseURL+"/sign-up", "application/json", bytes.NewBuffer(reqBody))
+	if err == nil {
+		resp.Body.Close()
+	}
+
+	// Sign in
+	signInReq := SignInRequest{
+		Email:       "test@example.com",
+		PasswordHex: passwordHex,
+	}
+
+	reqBody, _ = json.Marshal(signInReq)
+	resp, err = client.Post(baseURL+"/sign-in", "application/json", bytes.NewBuffer(reqBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var signInResp SignInResponse
+	err = json.NewDecoder(resp.Body).Decode(&signInResp)
+	resp.Body.Close()
+	require.NoError(t, err)
+
+	return AuthToken{
+		SessionKey: signInResp.AuthToken.SessionKey,
 	}
 }

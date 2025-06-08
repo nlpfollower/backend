@@ -174,7 +174,7 @@ func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID string, messag
 	return responseChan, nil
 }
 
-func (nc *NexusClient) EnqueueSession(userID db.Digest, sessionReq *core.SessionRequest) (<-chan *core.WrappedResponse, error) {
+func (nc *NexusClient) EnqueueSession(sessionReq *core.SessionRequest) (<-chan *core.WrappedResponse, error) {
 	responseChan := make(chan *core.WrappedResponse, 1) // Buffer for single response
 	requestID := db.NewDigest([]byte(fmt.Sprintf("session-req-%d", time.Now().UnixNano())))
 
