@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"testing"
@@ -311,19 +312,113 @@ type TestUserData struct {
 }
 
 func createTestUserForSession(t *testing.T, baseURL string, authToken AuthToken) (*TestUserData, error) {
-	// This is a simplified version - in a real test you'd create a proper message chain
-	// For now, we'll create a dummy message ID that the test can use
-	// In practice, you'd need to create a space, thread, and message through your API
+	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Create a dummy message ID for testing
-	// In real usage, this would come from creating actual test data
-	dummyMessageID := storage.CompoundMessageID{
-		ID:        [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
+	// Create a space
+	createSpaceReq := map[string]interface{}{
+		"name":        "Test Space for Session",
+		"description": "Test space for session management",
+		"auth_token":  authToken,
+	}
+
+	reqBody, _ := json.Marshal(createSpaceReq)
+	resp, err := client.Post(baseURL+"/space/create", "application/json", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create space: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create space: %s - %s", resp.Status, string(body))
+	}
+
+	var spaceResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&spaceResp); err != nil {
+		return nil, fmt.Errorf("failed to decode space response: %w", err)
+	}
+
+	spaceID, ok := spaceResp["space_id"].(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid space_id in response")
+	}
+
+	// Create a thread
+	createThreadReq := map[string]interface{}{
+		"space_id":    spaceID,
+		"name":        "Test Thread for Session",
+		"description": "Test thread for session management",
+		"auth_token":  authToken,
+	}
+
+	reqBody, _ = json.Marshal(createThreadReq)
+	resp, err = client.Post(baseURL+"/thread/create", "application/json", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create thread: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create thread: %s - %s", resp.Status, string(body))
+	}
+
+	var threadResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&threadResp); err != nil {
+		return nil, fmt.Errorf("failed to decode thread response: %w", err)
+	}
+
+	threadID, ok := threadResp["thread_id"].(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid thread_id in response")
+	}
+
+	// Create a message
+	createMessageReq := map[string]interface{}{
+		"thread_id":  threadID,
+		"author":     "user",
+		"messages":   []string{"Hello, this is a test message for session inference."},
+		"auth_token": authToken,
+	}
+
+	reqBody, _ = json.Marshal(createMessageReq)
+	resp, err = client.Post(baseURL+"/message/create", "application/json", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create message: %s - %s", resp.Status, string(body))
+	}
+
+	var messageResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&messageResp); err != nil {
+		return nil, fmt.Errorf("failed to decode message response: %w", err)
+	}
+
+	messageIDStr, ok := messageResp["message_id"].(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid message_id in response")
+	}
+
+	// Convert string message ID to digest
+	messageIDBytes, err := hex.DecodeString(messageIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode message ID: %w", err)
+	}
+
+	var messageIDArray [32]byte
+	copy(messageIDArray[:], messageIDBytes)
+
+	messageID := storage.CompoundMessageID{
+		ID:        messageIDArray,
 		MessageID: 0,
 	}
 
 	return &TestUserData{
 		AuthToken:     authToken,
-		LastMessageID: dummyMessageID,
+		LastMessageID: messageID,
 	}, nil
 }

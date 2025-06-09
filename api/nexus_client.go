@@ -29,7 +29,7 @@ func NewNexusClient(port int) *NexusClient {
 		port:           port,
 		requestQueue:   make(chan *core.WrappedRequest, 100),
 		stopChan:       make(chan struct{}),
-		reconnectDelay: 10 * time.Millisecond,
+		reconnectDelay: 1 * time.Second,
 		requestMap:     make(map[string]chan *core.WrappedResponse),
 	}
 }
