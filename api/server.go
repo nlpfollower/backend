@@ -54,8 +54,7 @@ func NewServer(dbPath string, nexusPort int) (*Server, error) {
 }
 
 func (s *Server) setupWebSocket() {
-	// Apply WebSocket-specific logging before the handler
-	s.router.Handle("/ws", WebSocketLoggingHandler(websocket.Handler(s.webSocketHandler.HandleWebSocket)))
+	s.router.Handle("/ws", websocket.Handler(s.webSocketHandler.HandleWebSocket))
 }
 
 func (s *Server) Start() error {

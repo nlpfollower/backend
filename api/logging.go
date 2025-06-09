@@ -1,17 +1,27 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"time"
 )
 
-// LoggingHandler logs all incoming HTTP requests
+// LoggingMiddleware logs all incoming HTTP requests
 func LoggingHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip detailed logging for WebSocket upgrade requests
+		if r.Header.Get("Upgrade") == "websocket" {
+			log.Printf("[WebSocket] %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		start := time.Now()
 
 		// Log request details
@@ -76,6 +86,14 @@ type loggingResponseWriter struct {
 func (lrw *loggingResponseWriter) WriteHeader(code int) {
 	lrw.statusCode = code
 	lrw.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack implements the http.Hijacker interface to support WebSocket connections
+func (lrw *loggingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := lrw.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, fmt.Errorf("ResponseWriter does not implement http.Hijacker")
 }
 
 // WebSocketLoggingHandler logs WebSocket connections
