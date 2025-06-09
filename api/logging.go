@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,13 +50,8 @@ func LoggingHandler(next http.Handler) http.Handler {
 
 				// Try to pretty-print JSON
 				if r.Header.Get("Content-Type") == "application/json" {
-					var jsonData interface{}
-					if err := json.Unmarshal(bodyBytes, &jsonData); err == nil {
-						prettyJSON, _ := json.MarshalIndent(jsonData, "", "  ")
-						log.Printf("Body (JSON):\n%s", string(prettyJSON))
-					} else {
-						log.Printf("Body (raw): %s", string(bodyBytes))
-					}
+					// Use custom logging that handles digest arrays
+					logPrettyJSON(bodyBytes)
 				} else {
 					log.Printf("Body (raw): %s", string(bodyBytes))
 				}
@@ -96,16 +92,79 @@ func (lrw *loggingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) 
 	return nil, nil, fmt.Errorf("ResponseWriter does not implement http.Hijacker")
 }
 
-// WebSocketLoggingHandler logs WebSocket connections
-func WebSocketLoggingHandler(handler http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Upgrade") == "websocket" {
-			log.Printf("=== WebSocket Connection ===")
-			log.Printf("Time: %s", time.Now().Format(time.RFC3339))
-			log.Printf("Remote Addr: %s", r.RemoteAddr)
-			log.Printf("URL: %s", r.URL.String())
-			log.Printf("===========================\n")
+// logPrettyJSON logs JSON with special handling for digest arrays
+func logPrettyJSON(data []byte) {
+	var jsonData interface{}
+	if err := json.Unmarshal(data, &jsonData); err != nil {
+		log.Printf("Body (raw): %s", string(data))
+		return
+	}
+
+	// Convert the data for pretty printing
+	prettyData := convertDigestsForLogging(jsonData)
+	prettyJSON, err := json.MarshalIndent(prettyData, "", "  ")
+	if err != nil {
+		log.Printf("Body (raw): %s", string(data))
+		return
+	}
+
+	log.Printf("Body (JSON):\n%s", string(prettyJSON))
+}
+
+// convertDigestsForLogging recursively converts 32-byte arrays to hex strings for logging only
+func convertDigestsForLogging(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{})
+		for k, v := range val {
+			// Special handling for fields that might contain digests
+			if isDigestField(k) {
+				if arr, ok := v.([]interface{}); ok && len(arr) == 32 {
+					if hexStr := tryConvertToHex(arr); hexStr != "" {
+						result[k] = hexStr
+					} else {
+						result[k] = convertDigestsForLogging(v)
+					}
+				} else {
+					result[k] = convertDigestsForLogging(v)
+				}
+			} else {
+				result[k] = convertDigestsForLogging(v)
+			}
 		}
-		handler.ServeHTTP(w, r)
-	})
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(val))
+		for i, elem := range val {
+			result[i] = convertDigestsForLogging(elem)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+// isDigestField checks if a field name likely contains a digest
+func isDigestField(fieldName string) bool {
+	// Add field names that typically contain digests
+	digestFields := []string{"thread_id", "space_id", "model_id", "parent_id", "message_id", "user_id", "id"}
+	for _, df := range digestFields {
+		if fieldName == df {
+			return true
+		}
+	}
+	return false
+}
+
+// tryConvertToHex attempts to convert an array to hex if it looks like bytes
+func tryConvertToHex(arr []interface{}) string {
+	bytes := make([]byte, 32)
+	for i, elem := range arr {
+		if num, ok := elem.(float64); ok && num >= 0 && num <= 255 {
+			bytes[i] = byte(num)
+		} else {
+			return "" // Not a byte array
+		}
+	}
+	return hex.EncodeToString(bytes)
 }
