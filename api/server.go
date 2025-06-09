@@ -38,7 +38,7 @@ func NewServer(dbPath string, nexusPort int) (*Server, error) {
 	s := &Server{
 		router:      mux.NewRouter(),
 		dbManager:   dbManager,
-		apiRouter:   NewAPIRouter(dbManager, nexusClient), // Pass nexusClient here
+		apiRouter:   NewAPIRouter(dbManager, nexusClient),
 		nexusClient: nexusClient,
 	}
 
@@ -47,11 +47,15 @@ func NewServer(dbPath string, nexusPort int) (*Server, error) {
 	s.apiRouter.SetupRoutes(s.router)
 	s.setupWebSocket()
 
+	// Apply logging middleware to all routes
+	s.router.Use(LoggingHandler)
+
 	return s, nil
 }
 
 func (s *Server) setupWebSocket() {
-	s.router.Handle("/ws", websocket.Handler(s.webSocketHandler.HandleWebSocket))
+	// Apply WebSocket-specific logging before the handler
+	s.router.Handle("/ws", WebSocketLoggingHandler(websocket.Handler(s.webSocketHandler.HandleWebSocket)))
 }
 
 func (s *Server) Start() error {
@@ -64,6 +68,7 @@ func (s *Server) Start() error {
 
 	go func() {
 		log.Println("Server starting on :8080")
+		log.Println("Request logging enabled - all incoming requests will be printed to console")
 		if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Error starting server: %v", err)
 		}
