@@ -168,14 +168,16 @@ func TestSessionManagement(t *testing.T) {
 				t.Fatalf("Inference error: %s", inferResp.Content)
 			}
 
+			if inferResp.Content != "" {
+				receivedContent = true
+				t.Logf("Received inference content: %q", inferResp.Content)
+			}
+
 			if inferResp.Type == "final" {
 				receivedFinal = true
 				t.Log("Received final inference response")
 				break
 			}
-
-			receivedContent = true
-			t.Logf("Received inference content: %q", inferResp.Content)
 		}
 
 		if responseCount >= maxResponses {
@@ -229,12 +231,13 @@ func TestSessionManagement(t *testing.T) {
 		require.Less(t, stopDuration, 1*time.Second, "Stop request should respond immediately")
 		t.Logf("Session stop request completed in %v", stopDuration)
 
-		// Poll status to verify session is stopping/stopped
-		stoppedDeadline := time.Now().Add(2 * time.Minute)
+		// Poll status to verify session is actually stopped (not just stopping)
+		stoppedDeadline := time.Now().Add(3 * time.Minute) // Give more time for actual stop
 		ticker2 := time.NewTicker(2 * time.Second)
 		defer ticker2.Stop()
 
 		checkCount := 0
+		finalState := ""
 		for time.Now().Before(stoppedDeadline) {
 			checkCount++
 
@@ -252,25 +255,32 @@ func TestSessionManagement(t *testing.T) {
 			finalStatusResp.Body.Close()
 			require.NoError(t, err)
 
-			t.Logf("Stop poll %d: Session state = %s", checkCount, finalStatus.State)
+			finalState = finalStatus.State
+			t.Logf("Stop poll %d: Session state = %s", checkCount, finalState)
 
-			// Accept stopping, stopped, or error states
-			if finalStatus.State == "stopped" {
+			// Session is fully stopped
+			if finalState == "stopped" {
 				t.Log("Session successfully stopped")
 				break
 			}
 
-			if finalStatus.State == "error" {
+			// Session stopped with error (also acceptable)
+			if finalState == "error" {
 				t.Logf("Session stopped with error state")
 				break
 			}
 
-			// Keep checking if still stopping
-			if finalStatus.State == "stopping" {
-				t.Logf("Session is still stopping...")
+			// Still stopping - continue waiting
+			if finalState == "stopping" {
+				t.Logf("Session is still stopping... (check %d)", checkCount)
 			}
 
 			<-ticker2.C
+		}
+
+		// Verify we got a final state
+		if finalState != "stopped" && finalState != "error" {
+			t.Fatalf("Session did not reach final state after %d checks. Final state: %s", checkCount, finalState)
 		}
 
 		t.Log("Session lifecycle test completed successfully")
