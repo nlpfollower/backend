@@ -10,7 +10,6 @@ import (
 	"golang.org/x/net/websocket"
 	"io"
 	"log"
-	"time"
 )
 
 const MaxHistoryMessages = 10
@@ -21,7 +20,6 @@ type WSMessageType int
 const (
 	WSMessageTypeHandshake = 1
 	WSMessageTypeInference = 2
-	WSMessageTypeSession   = 3
 )
 
 type WSMessage struct {
@@ -82,31 +80,6 @@ type WSInferenceResponse struct {
 
 func (i WSInferenceResponse) GetWSMessageType() WSMessageType {
 	return WSMessageTypeInference
-}
-
-// WebSocket session types
-type WSSessionRequest struct {
-	Action    string    `json:"action"`
-	ModelID   string    `json:"model_id,omitempty"`
-	SessionID string    `json:"session_id,omitempty"`
-	Duration  string    `json:"duration,omitempty"`
-	AuthToken AuthToken `json:"auth_token"`
-}
-
-func (s WSSessionRequest) GetWSMessageType() WSMessageType {
-	return WSMessageTypeSession
-}
-
-type WSSessionResponse struct {
-	Status    string `json:"status"`
-	SessionID string `json:"session_id,omitempty"`
-	Endpoint  string `json:"endpoint,omitempty"`
-	State     string `json:"state,omitempty"`
-	Error     string `json:"error,omitempty"`
-}
-
-func (s WSSessionResponse) GetWSMessageType() WSMessageType {
-	return WSMessageTypeSession
 }
 
 func NewWebSocketHandler(nexusClient *NexusClient, dbManager *storage.DatabaseManager) *WebSocketHandler {
@@ -217,40 +190,6 @@ func (wsh *WebSocketHandler) HandleWebSocket(ws *websocket.Conn) {
 
 			// Handle inference in a separate goroutine
 			go wsh.handleInferenceRequest(ws, userID, requestID, inferReq)
-
-		case WSMessageTypeSession:
-			if userID == "" {
-				resp := WSSessionResponse{
-					Status: "error",
-					Error:  "Handshake required before session management",
-				}
-				sendTypedWSResponse(ws, resp)
-				continue
-			}
-
-			var sessionReq WSSessionRequest
-			if err := json.Unmarshal(msg.Payload, &sessionReq); err != nil {
-				resp := WSSessionResponse{
-					Status: "error",
-					Error:  "Invalid session request format",
-				}
-				sendTypedWSResponse(ws, resp)
-				continue
-			}
-
-			// Validate the request's auth token
-			reqClaims, err := ValidateSessionKey(sessionReq.AuthToken.SessionKey)
-			if err != nil || reqClaims.UserID != userID {
-				resp := WSSessionResponse{
-					Status: "error",
-					Error:  "Invalid or mismatched auth token",
-				}
-				sendTypedWSResponse(ws, resp)
-				continue
-			}
-
-			// Handle session request in a separate goroutine
-			go wsh.handleSessionRequest(ws, userID, sessionReq)
 
 		default:
 			// Ignore unknown message types
@@ -432,59 +371,5 @@ func (wsh *WebSocketHandler) sendResponseToClient(userID string, resp WSInferenc
 		}
 	} else {
 		log.Printf("Client %s not found", userID)
-	}
-}
-
-// Add this new method to WebSocketHandler:
-func (wsh *WebSocketHandler) handleSessionRequest(ws *websocket.Conn, userID string, req WSSessionRequest) {
-
-	// Create nexus session request
-	nexusSessionReq := &core.SessionRequest{
-		Action:    core.SessionAction(req.Action),
-		ModelID:   req.ModelID,
-		SessionID: req.SessionID,
-		Duration:  req.Duration,
-	}
-
-	// Send to nexus
-	responseChan, err := wsh.nexusClient.EnqueueSession(nexusSessionReq)
-	if err != nil {
-		resp := WSSessionResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("Failed to enqueue session request: %v", err),
-		}
-		sendTypedWSResponse(ws, resp)
-		return
-	}
-
-	// Wait for response
-	select {
-	case nexusResp := <-responseChan:
-		var sessionResp core.SessionResponse
-		if err := json.Unmarshal(nexusResp.Data, &sessionResp); err != nil {
-			resp := WSSessionResponse{
-				Status: "error",
-				Error:  fmt.Sprintf("Failed to parse session response: %v", err),
-			}
-			sendTypedWSResponse(ws, resp)
-			return
-		}
-
-		// Convert to WebSocket response
-		wsResp := WSSessionResponse{
-			Status:    string(sessionResp.Status),
-			SessionID: sessionResp.SessionID,
-			Endpoint:  sessionResp.Endpoint,
-			State:     sessionResp.State,
-			Error:     sessionResp.Error,
-		}
-		sendTypedWSResponse(ws, wsResp)
-
-	case <-time.After(30 * time.Second):
-		resp := WSSessionResponse{
-			Status: "error",
-			Error:  "Session request timeout",
-		}
-		sendTypedWSResponse(ws, resp)
 	}
 }

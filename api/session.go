@@ -251,7 +251,8 @@ func (router *APIRouter) StopSession(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Wait for response
+	// Wait for response - the Nexus should respond immediately
+	// The actual stop operation happens in the background
 	resp, ok := <-respChan
 	if !ok {
 		http.Error(w, "Failed to receive session response", http.StatusInternalServerError)

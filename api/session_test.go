@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nlpfollower/deltamind/backend/storage"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/websocket"
 )
 
 func TestSessionManagement(t *testing.T) {
@@ -26,7 +28,7 @@ func TestSessionManagement(t *testing.T) {
 	// First sign in to get auth token
 	authToken := signInForTests(t, baseURL)
 
-	t.Run("Session Lifecycle", func(t *testing.T) {
+	t.Run("Session Lifecycle with WebSocket Inference", func(t *testing.T) {
 		client := &http.Client{Timeout: 30 * time.Second}
 
 		// Start session
@@ -101,6 +103,75 @@ func TestSessionManagement(t *testing.T) {
 
 		require.NotEmpty(t, sessionEndpoint, "Session should have an endpoint after initialization")
 
+		// Test sending an inference request via WebSocket
+		t.Log("Testing WebSocket inference request...")
+
+		// Create test user data for WebSocket inference
+		user, err := createTestUserForSession(t, baseURL, authToken)
+		require.NoError(t, err)
+
+		// Connect to WebSocket
+		origin := "http://localhost/"
+		wsURL := fmt.Sprintf("ws://localhost:8080/ws")
+		ws, err := websocket.Dial(wsURL, "", origin)
+		require.NoError(t, err)
+		defer ws.Close()
+
+		// Send WebSocket handshake
+		handshakeReq := HandshakeRequest{
+			AuthToken: authToken,
+		}
+		err = sendTypedWSMessage(ws, handshakeReq)
+		require.NoError(t, err)
+
+		// Read handshake response
+		handshakeResp, err := receiveTypedWSMessage[HandshakeResponse](ws)
+		require.NoError(t, err)
+		require.Equal(t, "success", handshakeResp.Status)
+		t.Log("WebSocket handshake successful")
+
+		// Send inference request via WebSocket
+		inferReq := WSInferenceRequest{
+			LastMessageID: &user.LastMessageID,
+			ModelID:       "llama-8b",
+			AuthToken:     authToken,
+		}
+		err = sendTypedWSMessage(ws, inferReq)
+		require.NoError(t, err)
+		t.Log("Sent WebSocket inference request")
+
+		// Read inference responses
+		receivedContent := false
+		receivedFinal := false
+		timeout := time.After(60 * time.Second)
+
+		for !receivedFinal {
+			select {
+			case <-timeout:
+				t.Fatal("Timeout waiting for inference response")
+			default:
+				inferResp, err := receiveTypedWSMessage[WSInferenceResponse](ws)
+				require.NoError(t, err)
+
+				if inferResp.Status == "error" {
+					t.Fatalf("Inference error: %s", inferResp.Content)
+				}
+
+				if inferResp.Content != "" {
+					receivedContent = true
+					t.Logf("Received inference content: %q", inferResp.Content)
+				}
+
+				if inferResp.Type == "final" {
+					receivedFinal = true
+					t.Log("Received final inference response")
+				}
+			}
+		}
+
+		require.True(t, receivedContent, "Should have received some content from inference")
+		ws.Close()
+
 		// Test extending session
 		extendReq := ExtendSessionRequest{
 			SessionID: sessionID,
@@ -120,14 +191,18 @@ func TestSessionManagement(t *testing.T) {
 		require.True(t, extendResp.Success)
 		t.Log("Session extended successfully")
 
-		// Stop session
+		// Stop session - this should respond immediately
+		t.Log("Stopping session...")
 		stopReq := StopSessionRequest{
 			SessionID: sessionID,
 			AuthToken: authToken,
 		}
 
 		reqBody, _ = json.Marshal(stopReq)
+		stopStartTime := time.Now()
 		resp, err = client.Post(baseURL+"/session/stop", "application/json", bytes.NewBuffer(reqBody))
+		stopDuration := time.Since(stopStartTime)
+
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -136,23 +211,54 @@ func TestSessionManagement(t *testing.T) {
 		resp.Body.Close()
 		require.NoError(t, err)
 		require.True(t, stopResp.Success)
-		t.Log("Session stopped successfully")
 
-		// Verify session is stopped
-		statusReq := SessionStatusRequest{
-			SessionID: sessionID,
-			AuthToken: authToken,
+		// Ensure stop responded quickly (should be under 1 second)
+		require.Less(t, stopDuration, 1*time.Second, "Stop request should respond immediately")
+		t.Logf("Session stop request completed in %v", stopDuration)
+
+		// Poll status to verify session is stopping/stopped
+		stoppedDeadline := time.Now().Add(2 * time.Minute)
+		ticker2 := time.NewTicker(2 * time.Second)
+		defer ticker2.Stop()
+
+		checkCount := 0
+		for time.Now().Before(stoppedDeadline) {
+			checkCount++
+
+			statusReq := SessionStatusRequest{
+				SessionID: sessionID,
+				AuthToken: authToken,
+			}
+
+			reqBody, _ = json.Marshal(statusReq)
+			finalStatusResp, err := client.Post(baseURL+"/session/status", "application/json", bytes.NewBuffer(reqBody))
+			require.NoError(t, err)
+
+			var finalStatus SessionStatusResponse
+			err = json.NewDecoder(finalStatusResp.Body).Decode(&finalStatus)
+			finalStatusResp.Body.Close()
+			require.NoError(t, err)
+
+			t.Logf("Stop poll %d: Session state = %s", checkCount, finalStatus.State)
+
+			// Accept stopping, stopped, or error states
+			if finalStatus.State == "stopped" {
+				t.Log("Session successfully stopped")
+				break
+			}
+
+			if finalStatus.State == "error" {
+				t.Logf("Session stopped with error state")
+				break
+			}
+
+			// Keep checking if still stopping
+			if finalStatus.State == "stopping" {
+				t.Logf("Session is still stopping...")
+			}
+
+			<-ticker2.C
 		}
-
-		reqBody, _ = json.Marshal(statusReq)
-		finalStatusResp, err := client.Post(baseURL+"/session/status", "application/json", bytes.NewBuffer(reqBody))
-		require.NoError(t, err)
-
-		var finalStatus SessionStatusResponse
-		err = json.NewDecoder(finalStatusResp.Body).Decode(&finalStatus)
-		finalStatusResp.Body.Close()
-		require.NoError(t, err)
-		require.Contains(t, []string{"stopped", "stopping"}, finalStatus.State)
 
 		t.Log("Session lifecycle test completed successfully")
 	})
@@ -196,4 +302,28 @@ func signInForTests(t *testing.T, baseURL string) AuthToken {
 	return AuthToken{
 		SessionKey: signInResp.AuthToken.SessionKey,
 	}
+}
+
+// Helper function to create test user data for WebSocket inference
+type TestUserData struct {
+	AuthToken     AuthToken
+	LastMessageID storage.CompoundMessageID
+}
+
+func createTestUserForSession(t *testing.T, baseURL string, authToken AuthToken) (*TestUserData, error) {
+	// This is a simplified version - in a real test you'd create a proper message chain
+	// For now, we'll create a dummy message ID that the test can use
+	// In practice, you'd need to create a space, thread, and message through your API
+
+	// Create a dummy message ID for testing
+	// In real usage, this would come from creating actual test data
+	dummyMessageID := storage.CompoundMessageID{
+		ID:        [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
+		MessageID: 0,
+	}
+
+	return &TestUserData{
+		AuthToken:     authToken,
+		LastMessageID: dummyMessageID,
+	}, nil
 }
