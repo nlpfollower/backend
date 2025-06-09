@@ -314,15 +314,15 @@ type TestUserData struct {
 func createTestUserForSession(t *testing.T, baseURL string, authToken AuthToken) (*TestUserData, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Create a space
-	createSpaceReq := map[string]interface{}{
-		"name":        "Test Space for Session",
-		"description": "Test space for session management",
-		"auth_token":  authToken,
+	// Create a space using the correct endpoint and request structure
+	createSpaceReq := CreateSpaceRequest{
+		Name:        "Test Space for Session",
+		Description: "Test space for session management",
+		AuthToken:   authToken,
 	}
 
 	reqBody, _ := json.Marshal(createSpaceReq)
-	resp, err := client.Post(baseURL+"/space/create", "application/json", bytes.NewBuffer(reqBody))
+	resp, err := client.Post(baseURL+"/create-space", "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create space: %w", err)
 	}
@@ -333,26 +333,20 @@ func createTestUserForSession(t *testing.T, baseURL string, authToken AuthToken)
 		return nil, fmt.Errorf("failed to create space: %s - %s", resp.Status, string(body))
 	}
 
-	var spaceResp map[string]interface{}
+	var spaceResp CreateSpaceResponse
 	if err := json.NewDecoder(resp.Body).Decode(&spaceResp); err != nil {
 		return nil, fmt.Errorf("failed to decode space response: %w", err)
 	}
 
-	spaceID, ok := spaceResp["space_id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid space_id in response")
-	}
-
-	// Create a thread
-	createThreadReq := map[string]interface{}{
-		"space_id":    spaceID,
-		"name":        "Test Thread for Session",
-		"description": "Test thread for session management",
-		"auth_token":  authToken,
+	// Create a thread using the correct endpoint and request structure
+	createThreadReq := CreateThreadRequest{
+		SpaceID:   spaceResp.Space.ID,
+		Title:     "Test Thread for Session",
+		AuthToken: authToken,
 	}
 
 	reqBody, _ = json.Marshal(createThreadReq)
-	resp, err = client.Post(baseURL+"/thread/create", "application/json", bytes.NewBuffer(reqBody))
+	resp, err = client.Post(baseURL+"/create-thread", "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create thread: %w", err)
 	}
@@ -363,26 +357,21 @@ func createTestUserForSession(t *testing.T, baseURL string, authToken AuthToken)
 		return nil, fmt.Errorf("failed to create thread: %s - %s", resp.Status, string(body))
 	}
 
-	var threadResp map[string]interface{}
+	var threadResp CreateThreadResponse
 	if err := json.NewDecoder(resp.Body).Decode(&threadResp); err != nil {
 		return nil, fmt.Errorf("failed to decode thread response: %w", err)
 	}
 
-	threadID, ok := threadResp["thread_id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid thread_id in response")
-	}
-
-	// Create a message
-	createMessageReq := map[string]interface{}{
-		"thread_id":  threadID,
-		"author":     "user",
-		"messages":   []string{"Hello, this is a test message for session inference."},
-		"auth_token": authToken,
+	// Create a message using the correct endpoint and request structure
+	createMessageReq := CreateMessageRequest{
+		ThreadID:  threadResp.Thread.ID,
+		Author:    "user",
+		Content:   "Hello, this is a test message for session inference.",
+		AuthToken: authToken,
 	}
 
 	reqBody, _ = json.Marshal(createMessageReq)
-	resp, err = client.Post(baseURL+"/message/create", "application/json", bytes.NewBuffer(reqBody))
+	resp, err = client.Post(baseURL+"/create-message", "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create message: %w", err)
 	}
@@ -393,27 +382,14 @@ func createTestUserForSession(t *testing.T, baseURL string, authToken AuthToken)
 		return nil, fmt.Errorf("failed to create message: %s - %s", resp.Status, string(body))
 	}
 
-	var messageResp map[string]interface{}
+	var messageResp CreateMessageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&messageResp); err != nil {
 		return nil, fmt.Errorf("failed to decode message response: %w", err)
 	}
 
-	messageIDStr, ok := messageResp["message_id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid message_id in response")
-	}
-
-	// Convert string message ID to digest
-	messageIDBytes, err := hex.DecodeString(messageIDStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode message ID: %w", err)
-	}
-
-	var messageIDArray [32]byte
-	copy(messageIDArray[:], messageIDBytes)
-
+	// Create compound message ID from the response
 	messageID := storage.CompoundMessageID{
-		ID:        messageIDArray,
+		ID:        messageResp.Message.ID,
 		MessageID: 0,
 	}
 
