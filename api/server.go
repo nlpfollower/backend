@@ -48,7 +48,7 @@ func NewServer(dbPath string, nexusPort int) (*Server, error) {
 	s.setupWebSocket()
 
 	// Apply logging middleware to all routes
-	s.router.Use(LoggingHandler)
+	//s.router.Use(LoggingHandler)
 
 	return s, nil
 }

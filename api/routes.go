@@ -41,12 +41,7 @@ func (router *APIRouter) SetupRoutes(mux *mux.Router) {
 	// Model routes
 	mux.HandleFunc("/api/v0/create-model", router.CreateModel).Methods("POST")
 	mux.HandleFunc("/api/v0/get-models", router.GetModels).Methods("POST")
-	mux.HandleFunc("/api/v0/delete-model", router.DeleteModel).Methods("POST")
-
-	// Model clone routes
 	mux.HandleFunc("/api/v0/clone-model", router.CloneModel).Methods("POST")
-	mux.HandleFunc("/api/v0/get-clone-status", router.GetCloneStatus).Methods("POST")
-	mux.HandleFunc("/api/v0/get-user-models", router.GetUserCloneableModels).Methods("POST")
 
 	// Model Iteration routes
 	//mux.HandleFunc("/api/v0/create-model-iteration", router.CreateModelIteration).Methods("POST")

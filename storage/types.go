@@ -23,6 +23,7 @@ type User struct {
 	EncryptedSeed []byte     `json:"encrypted_seed"`
 	AuthMethod    AuthMethod `json:"auth_method"`
 	CreatedAt     time.Time  `json:"created_at"`
+	NextCloneNum  uint64     `json:"next_clone_num"`
 }
 
 type Space struct {
@@ -78,46 +79,23 @@ type ModelStatus string
 
 const (
 	ModelStatusReady    ModelStatus = "ready"
-	ModelStatusCloning  ModelStatus = "cloning"
 	ModelStatusTraining ModelStatus = "training"
 	ModelStatusError    ModelStatus = "error"
 )
 
-// Update the ModelInfo struct
 type ModelInfo struct {
-	ID           db.Digest   `json:"id"`
-	UserID       db.Digest   `json:"user_id"`
-	Name         string      `json:"name"`         // e.g., "llama-70b-u1-c1-t2"
-	DisplayName  string      `json:"display_name"` // User-friendly name
-	ModelType    ModelType   `json:"model_type"`
-	BaseModel    string      `json:"base_model"` // "llama-8b" or "llama-70b"
-	ModelSize    string      `json:"model_size"` // "8B" or "70B"
-	ParentID     *db.Digest  `json:"parent_id,omitempty"`
-	Status       ModelStatus `json:"status"`
-	PhysicalPath string      `json:"physical_path"` // Path in /mnt/cold-storage
-	CloneJobID   *string     `json:"clone_job_id,omitempty"`
-	TrainJobID   *string     `json:"train_job_id,omitempty"`
-	CreatedAt    time.Time   `json:"created_at"`
-	UpdatedAt    time.Time   `json:"updated_at"`
-}
-
-type ModelIteration struct {
-	ID          db.Digest `json:"id"`
-	ModelID     db.Digest `json:"model_id"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	Index       uint64    `json:"index"`
-}
-
-// ModelCloneJob tracks async clone operations
-type ModelCloneJob struct {
-	ID          string     `json:"id"`
-	SourceID    db.Digest  `json:"source_id"`
-	TargetID    db.Digest  `json:"target_id"`
-	Status      string     `json:"status"` // "pending", "running", "completed", "failed"
-	Error       string     `json:"error,omitempty"`
-	StartedAt   time.Time  `json:"started_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ID             db.Digest   `json:"id"`
+	UserID         db.Digest   `json:"user_id"`
+	Name           string      `json:"name"`         // Auto-generated: "llama-70b-u1-c1-t2"
+	DisplayName    string      `json:"display_name"` // User-friendly name
+	ModelType      ModelType   `json:"model_type"`
+	BaseModel      string      `json:"base_model"` // "llama-8b" or "llama-70b"
+	ModelSize      string      `json:"model_size"` // "8B" or "70B"
+	ParentID       *db.Digest  `json:"parent_id,omitempty"`
+	Status         ModelStatus `json:"status"`
+	CheckpointPath string      `json:"checkpoint_path"` // Actual checkpoint location
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
 }
 
 func NewTimestamp(t time.Time) Timestamp {

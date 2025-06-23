@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,28 +18,324 @@ func TestModelCloning(t *testing.T) {
 	user, err := createTestUser(t, ts, "cloneuser@example.com", "cloneuser", "password123")
 	require.NoError(t, err)
 
-	// First, we need to add base models via the database directly
-	// since the API doesn't expose base model creation
-	baseModelID := addBaseModelDirectly(t, ts.Server.dbManager)
-
-	// Test getting user models (should include base models)
-	testGetUserModels(t, ts, user, baseModelID)
+	// Add base models
+	baseModel8B := addBaseModelDirectly(t, ts.Server.dbManager, "llama-8b", "8B")
+	baseModel70B := addBaseModelDirectly(t, ts.Server.dbManager, "llama-70b", "70B")
 
 	// Test cloning a base model
-	clonedModel := testCloneModel(t, ts, user, baseModelID)
+	t.Run("CloneBaseModel", func(t *testing.T) {
+		req := CloneModelRequest{
+			SourceModelID: baseModel8B,
+			DisplayName:   "My Llama 8B Clone",
+			AuthToken:     user.AuthToken,
+		}
 
-	// Test clone status checking
-	testCloneStatus(t, ts, user, clonedModel.CloneJobID)
+		resp, err := performRequest[CloneModelRequest, CloneModelResponse](
+			t, ts, "POST", "/api/v0/clone-model", req)
+		require.NoError(t, err)
 
-	// Test cloning a cloned model
-	testCloneClonedModel(t, ts, user, clonedModel.Model.ID)
+		// Verify response
+		require.Equal(t, storage.ModelTypeClone, resp.Model.ModelType)
+		require.Equal(t, "llama-8b", resp.Model.BaseModel)
+		require.Equal(t, storage.ModelStatusReady, resp.Model.Status)
+		require.Equal(t, "My Llama 8B Clone", resp.Model.DisplayName)
+		require.NotNil(t, resp.Model.ParentID)
+		require.Equal(t, baseModel8B, *resp.Model.ParentID)
+
+		// Verify model naming convention (first clone is c0)
+		userIDStr, _ := db.DigestFromString(user.AuthToken.UserID)
+		expectedName := fmt.Sprintf("llama-8b-u%s-c0", userIDStr.String()[:8])
+		require.Equal(t, expectedName, resp.Model.Name)
+
+		// Verify checkpoint path was inherited
+		require.Equal(t, "/mnt/cold-storage/contents/dcp/llama-8b", resp.Model.CheckpointPath)
+	})
+
+	// Test clone numbering increments properly
+	t.Run("CloneNumberIncrement", func(t *testing.T) {
+		// Clone again (should be c1)
+		req := CloneModelRequest{
+			SourceModelID: baseModel8B,
+			DisplayName:   "My Second Clone",
+			AuthToken:     user.AuthToken,
+		}
+
+		resp, err := performRequest[CloneModelRequest, CloneModelResponse](
+			t, ts, "POST", "/api/v0/clone-model", req)
+		require.NoError(t, err)
+
+		userIDStr, _ := db.DigestFromString(user.AuthToken.UserID)
+		expectedName := fmt.Sprintf("llama-8b-u%s-c1", userIDStr.String()[:8])
+		require.Equal(t, expectedName, resp.Model.Name)
+
+		// Clone the 70B model (should be c2)
+		req = CloneModelRequest{
+			SourceModelID: baseModel70B,
+			DisplayName:   "My 70B Clone",
+			AuthToken:     user.AuthToken,
+		}
+
+		resp, err = performRequest[CloneModelRequest, CloneModelResponse](
+			t, ts, "POST", "/api/v0/clone-model", req)
+		require.NoError(t, err)
+
+		// Clone numbers are per-user, not per-model
+		expectedName = fmt.Sprintf("llama-70b-u%s-c2", userIDStr.String()[:8])
+		require.Equal(t, expectedName, resp.Model.Name)
+	})
+
+	// Test listing models
+	t.Run("ListModels", func(t *testing.T) {
+		req := GetModelsRequest{
+			AuthToken:   user.AuthToken,
+			IncludeBase: true,
+		}
+
+		resp, err := performRequest[GetModelsRequest, GetModelsResponse](
+			t, ts, "POST", "/api/v0/get-models", req)
+		require.NoError(t, err)
+
+		// Should have 3 user models + 2 base models
+		require.GreaterOrEqual(t, len(resp.Models), 5)
+
+		// Count model types
+		var baseCount, cloneCount int
+		var userModels []*storage.ModelInfo
+
+		for _, model := range resp.Models {
+			switch model.ModelType {
+			case storage.ModelTypeBase:
+				baseCount++
+			case storage.ModelTypeClone:
+				cloneCount++
+				userID, _ := db.DigestFromString(user.AuthToken.UserID)
+				if model.UserID == userID {
+					userModels = append(userModels, model)
+				}
+			}
+		}
+
+		require.GreaterOrEqual(t, baseCount, 2) // At least our 2 base models
+		require.Equal(t, 3, len(userModels))    // Exactly 3 clones for our user
+	})
+
+	// Test cloning without permission
+	t.Run("CloneUnauthorized", func(t *testing.T) {
+		// Create another user
+		user2, err := createTestUser(t, ts, "user2@example.com", "user2", "password123")
+		require.NoError(t, err)
+
+		// Get user1's model
+		var user1ModelID db.Digest
+		err = ts.Server.dbManager.View(func(txn *storage.DatabaseTransaction) error {
+			userID, _ := db.DigestFromString(user.AuthToken.UserID)
+			models, err := txn.GetUserModels(userID, 10, uint64(time.Now().UnixNano()))
+			if err != nil {
+				return err
+			}
+			if len(models) > 0 {
+				user1ModelID = models[0].ID
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Try to clone user1's model as user2
+		req := CloneModelRequest{
+			SourceModelID: user1ModelID,
+			DisplayName:   "Stolen Clone",
+			AuthToken:     user2.AuthToken,
+		}
+
+		_, err = performRequest[CloneModelRequest, CloneModelResponse](
+			t, ts, "POST", "/api/v0/clone-model", req)
+		require.Error(t, err)
+	})
 }
 
-func addBaseModelDirectly(t *testing.T, dbManager *storage.DatabaseManager) db.Digest {
+func TestCheckpointPathInheritance(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	user, err := createTestUser(t, ts, "pathuser@example.com", "pathuser", "password123")
+	require.NoError(t, err)
+
+	// Create a chain: base -> clone -> trained -> clone
+	baseModelID := addBaseModelDirectly(t, ts.Server.dbManager, "llama-8b", "8B")
+
+	// Clone base (c0)
+	clone1Req := CloneModelRequest{
+		SourceModelID: baseModelID,
+		DisplayName:   "Clone 1",
+		AuthToken:     user.AuthToken,
+	}
+	clone1Resp, err := performRequest[CloneModelRequest, CloneModelResponse](
+		t, ts, "POST", "/api/v0/clone-model", clone1Req)
+	require.NoError(t, err)
+	require.Equal(t, "/mnt/cold-storage/contents/dcp/llama-8b", clone1Resp.Model.CheckpointPath)
+
+	// Verify name
+	userID, _ := db.DigestFromString(user.AuthToken.UserID)
+	require.Equal(t, fmt.Sprintf("llama-8b-u%s-c0", userID.String()[:8]), clone1Resp.Model.Name)
+
+	// Simulate training completion (manually create trained model)
+	var trainedModelID db.Digest
+	err = ts.Server.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		modelIDBytes, _ := GenerateRandomBytes(32)
+		trainedModelID = db.NewDigest(modelIDBytes)
+
+		trained := storage.ModelInfo{
+			ID:             trainedModelID,
+			UserID:         userID,
+			Name:           fmt.Sprintf("llama-8b-u%s-c0-t1", userID.String()[:8]),
+			DisplayName:    "Trained Model",
+			ModelType:      storage.ModelTypeTrained,
+			BaseModel:      "llama-8b",
+			ModelSize:      "8B",
+			ParentID:       &clone1Resp.Model.ID,
+			Status:         storage.ModelStatusReady,
+			CheckpointPath: fmt.Sprintf("/mnt/cold-storage/contents/dcp/llama-8b-u%s-c0-t1", userID.String()[:8]),
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+		return txn.SetModel(userID, &trained)
+	})
+	require.NoError(t, err)
+
+	// Clone the trained model (should be c1)
+	clone2Req := CloneModelRequest{
+		SourceModelID: trainedModelID,
+		DisplayName:   "Clone of Trained",
+		AuthToken:     user.AuthToken,
+	}
+	clone2Resp, err := performRequest[CloneModelRequest, CloneModelResponse](
+		t, ts, "POST", "/api/v0/clone-model", clone2Req)
+	require.NoError(t, err)
+
+	// Should inherit the trained model's checkpoint, not create a chain
+	expectedCheckpoint := fmt.Sprintf("/mnt/cold-storage/contents/dcp/llama-8b-u%s-c0-t1", userID.String()[:8])
+	require.Equal(t, expectedCheckpoint, clone2Resp.Model.CheckpointPath)
+
+	// Should be c1 (next clone number)
+	expectedName := fmt.Sprintf("llama-8b-u%s-c1", userID.String()[:8])
+	require.Equal(t, expectedName, clone2Resp.Model.Name)
+}
+
+func TestMultipleUsersCloning(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	// Create base model
+	baseModelID := addBaseModelDirectly(t, ts.Server.dbManager, "llama-8b", "8B")
+
+	// Create multiple users
+	users := []struct {
+		email    string
+		username string
+	}{
+		{"user1@example.com", "user1"},
+		{"user2@example.com", "user2"},
+		{"user3@example.com", "user3"},
+	}
+
+	for _, u := range users {
+		user, err := createTestUser(t, ts, u.email, u.username, "password123")
+		require.NoError(t, err)
+
+		// Each user clones the base model
+		req := CloneModelRequest{
+			SourceModelID: baseModelID,
+			DisplayName:   fmt.Sprintf("%s's Clone", u.username),
+			AuthToken:     user.AuthToken,
+		}
+
+		resp, err := performRequest[CloneModelRequest, CloneModelResponse](
+			t, ts, "POST", "/api/v0/clone-model", req)
+		require.NoError(t, err)
+
+		// Each user's first clone should be c0
+		userID, _ := db.DigestFromString(user.AuthToken.UserID)
+		expectedName := fmt.Sprintf("llama-8b-u%s-c0", userID.String()[:8])
+		require.Equal(t, expectedName, resp.Model.Name)
+
+		// Clone again for the same user
+		req.DisplayName = fmt.Sprintf("%s's Second Clone", u.username)
+		resp, err = performRequest[CloneModelRequest, CloneModelResponse](
+			t, ts, "POST", "/api/v0/clone-model", req)
+		require.NoError(t, err)
+
+		// Should be c1
+		expectedName = fmt.Sprintf("llama-8b-u%s-c1", userID.String()[:8])
+		require.Equal(t, expectedName, resp.Model.Name)
+	}
+}
+
+func TestParentChildRelationships(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	user, err := createTestUser(t, ts, "parenttest@example.com", "parenttest", "password123")
+	require.NoError(t, err)
+
+	baseModelID := addBaseModelDirectly(t, ts.Server.dbManager, "llama-70b", "70B")
+
+	// Create a tree of clones
+	var cloneIDs []db.Digest
+
+	// Clone from base
+	for i := 0; i < 3; i++ {
+		req := CloneModelRequest{
+			SourceModelID: baseModelID,
+			DisplayName:   fmt.Sprintf("Clone %d from base", i),
+			AuthToken:     user.AuthToken,
+		}
+		resp, err := performRequest[CloneModelRequest, CloneModelResponse](
+			t, ts, "POST", "/api/v0/clone-model", req)
+		require.NoError(t, err)
+		cloneIDs = append(cloneIDs, resp.Model.ID)
+	}
+
+	// Test parent-child queries
+	err = ts.Server.dbManager.View(func(txn *storage.DatabaseTransaction) error {
+		// Get children of base model
+		children, err := txn.GetModelsByParent(baseModelID, 10, uint64(time.Now().Add(time.Hour).UnixNano()))
+		require.NoError(t, err)
+		require.Len(t, children, 3)
+
+		// Verify all children point to base
+		for _, child := range children {
+			require.NotNil(t, child.ParentID)
+			require.Equal(t, baseModelID, *child.ParentID)
+			require.Equal(t, storage.ModelTypeClone, child.ModelType)
+		}
+
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestResolveCheckpointPath(t *testing.T) {
+	// Test with valid checkpoint
+	model := &storage.ModelInfo{
+		Name:           "test-model",
+		CheckpointPath: "/mnt/storage/checkpoint",
+	}
+
+	path, err := ResolveCheckpointPath(model)
+	require.NoError(t, err)
+	require.Equal(t, "/mnt/storage/checkpoint", path)
+
+	// Test with missing checkpoint
+	model.CheckpointPath = ""
+	_, err = ResolveCheckpointPath(model)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "has no checkpoint path")
+}
+
+func addBaseModelDirectly(t *testing.T, dbManager *storage.DatabaseManager, modelName, modelSize string) db.Digest {
 	var modelID db.Digest
 
 	err := dbManager.Update(func(txn *storage.DatabaseTransaction) error {
-		// Create base model
 		modelIDBytes, err := GenerateRandomBytes(32)
 		if err != nil {
 			return err
@@ -48,203 +345,20 @@ func addBaseModelDirectly(t *testing.T, dbManager *storage.DatabaseManager) db.D
 		systemUserID := db.NewDigest([]byte("system-base-models"))
 
 		model := storage.ModelInfo{
-			ID:           modelID,
-			UserID:       systemUserID,
-			Name:         "llama-8b",
-			DisplayName:  "Llama 8B Base",
-			ModelType:    storage.ModelTypeBase,
-			BaseModel:    "llama-8b",
-			ModelSize:    "8B",
-			Status:       storage.ModelStatusReady,
-			PhysicalPath: "/mnt/cold-storage/contents/dcp/llama-8b",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
+			ID:             modelID,
+			UserID:         systemUserID,
+			Name:           modelName,
+			DisplayName:    fmt.Sprintf("%s Base", modelName),
+			ModelType:      storage.ModelTypeBase,
+			BaseModel:      modelName,
+			ModelSize:      modelSize,
+			Status:         storage.ModelStatusReady,
+			CheckpointPath: fmt.Sprintf("/mnt/cold-storage/contents/dcp/%s", modelName),
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		}
 
 		return txn.SetModel(systemUserID, &model)
-	})
-
-	require.NoError(t, err)
-	return modelID
-}
-
-func testGetUserModels(t *testing.T, ts *TestServer, user *SignUpResponse, baseModelID db.Digest) {
-	req := GetUserModelsRequest{
-		IncludeBase: true,
-		AuthToken:   user.AuthToken,
-	}
-
-	resp, err := performRequest[GetUserModelsRequest, GetUserModelsResponse](
-		t, ts, "POST", "/api/v0/get-user-models", req)
-	require.NoError(t, err)
-
-	// Should have at least the base model
-	require.GreaterOrEqual(t, len(resp.Models), 1)
-
-	// Find the base model
-	found := false
-	for _, model := range resp.Models {
-		if model.ID == baseModelID {
-			found = true
-			require.Equal(t, storage.ModelTypeBase, model.ModelType)
-			require.Equal(t, "llama-8b", model.BaseModel)
-			require.Equal(t, storage.ModelStatusReady, model.Status)
-			break
-		}
-	}
-	require.True(t, found, "Base model not found in user models")
-}
-
-func testCloneModel(t *testing.T, ts *TestServer, user *SignUpResponse, sourceModelID db.Digest) *CloneModelResponse {
-	req := CloneModelRequest{
-		SourceModelID: sourceModelID,
-		DisplayName:   "My Llama 8B Clone",
-		AuthToken:     user.AuthToken,
-	}
-
-	resp, err := performRequest[CloneModelRequest, CloneModelResponse](
-		t, ts, "POST", "/api/v0/clone-model", req)
-	require.NoError(t, err)
-
-	// Verify response
-	require.NotEmpty(t, resp.CloneJobID)
-	require.Equal(t, storage.ModelTypeClone, resp.Model.ModelType)
-	require.Equal(t, "llama-8b", resp.Model.BaseModel)
-	require.Equal(t, storage.ModelStatusCloning, resp.Model.Status)
-	require.Equal(t, "My Llama 8B Clone", resp.Model.DisplayName)
-	require.NotNil(t, resp.Model.ParentID)
-	require.Equal(t, sourceModelID, *resp.Model.ParentID)
-
-	// Verify model naming convention
-	require.Contains(t, resp.Model.Name, "llama-8b-u")
-	require.Contains(t, resp.Model.Name, "-c")
-
-	return resp
-}
-
-func testCloneStatus(t *testing.T, ts *TestServer, user *SignUpResponse, cloneJobID string) {
-	// In a real test, we'd mock the nexus response
-	// For now, just verify the request works
-	req := GetCloneStatusRequest{
-		CloneJobID: cloneJobID,
-		AuthToken:  user.AuthToken,
-	}
-
-	// This will fail without a proper nexus mock, but the request structure is tested
-	_, _ = performRequest[GetCloneStatusRequest, GetCloneStatusResponse](
-		t, ts, "POST", "/api/v0/get-clone-status", req)
-
-	// In production, you'd check:
-	// require.NoError(t, err)
-	// require.Equal(t, cloneJobID, resp.JobID)
-	// require.Contains(t, []string{"pending", "running", "completed"}, resp.Status)
-}
-
-func testCloneClonedModel(t *testing.T, ts *TestServer, user *SignUpResponse, clonedModelID db.Digest) {
-	// First update the cloned model status to ready
-	err := ts.Server.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
-		model, err := txn.GetModel(clonedModelID)
-		if err != nil {
-			return err
-		}
-		model.Status = storage.ModelStatusReady
-		return txn.SetModel(model.UserID, model)
-	})
-	require.NoError(t, err)
-
-	// Now clone the cloned model
-	req := CloneModelRequest{
-		SourceModelID: clonedModelID,
-		DisplayName:   "Clone of Clone",
-		AuthToken:     user.AuthToken,
-	}
-
-	resp, err := performRequest[CloneModelRequest, CloneModelResponse](
-		t, ts, "POST", "/api/v0/clone-model", req)
-	require.NoError(t, err)
-
-	// Verify it creates a new clone line
-	require.Equal(t, storage.ModelTypeClone, resp.Model.ModelType)
-	require.Equal(t, "llama-8b", resp.Model.BaseModel)
-	require.Contains(t, resp.Model.Name, "-c")
-
-	// Should have different clone number than parent
-	// This tests that cloning a trained model resets the hierarchy
-}
-
-func TestModelTypeRestrictions(t *testing.T) {
-	ts := NewTestServer(t)
-	defer ts.Close()
-
-	// Create a user
-	user, err := createTestUser(t, ts, "restrictuser@example.com", "restrictuser", "password123")
-	require.NoError(t, err)
-
-	// Add a base model and a trained model
-	baseModelID := addBaseModelDirectly(t, ts.Server.dbManager)
-	trainedModelID := addTrainedModelDirectly(t, user.AuthToken.UserID, ts.Server.dbManager)
-
-	// Test that only clone and trained models can be trained
-	// (This would be tested when training endpoints are implemented)
-
-	// Test model filtering by type
-	req := GetUserModelsRequest{
-		IncludeBase: true,
-		AuthToken:   user.AuthToken,
-	}
-
-	resp, err := performRequest[GetUserModelsRequest, GetUserModelsResponse](
-		t, ts, "POST", "/api/v0/get-user-models", req)
-	require.NoError(t, err)
-
-	// Verify we have models of different types
-	hasBase := false
-	hasTrained := false
-
-	for _, model := range resp.Models {
-		if model.ID == baseModelID {
-			hasBase = true
-			require.Equal(t, storage.ModelTypeBase, model.ModelType)
-		}
-		if model.ID == trainedModelID {
-			hasTrained = true
-			require.Equal(t, storage.ModelTypeTrained, model.ModelType)
-		}
-	}
-
-	require.True(t, hasBase, "Base model not found")
-	require.True(t, hasTrained, "Trained model not found")
-}
-
-func addTrainedModelDirectly(t *testing.T, userIDStr string, dbManager *storage.DatabaseManager) db.Digest {
-	var modelID db.Digest
-
-	userID, err := db.DigestFromString(userIDStr)
-	require.NoError(t, err)
-
-	err = dbManager.Update(func(txn *storage.DatabaseTransaction) error {
-		modelIDBytes, err := GenerateRandomBytes(32)
-		if err != nil {
-			return err
-		}
-
-		modelID = db.NewDigest(modelIDBytes)
-
-		model := storage.ModelInfo{
-			ID:           modelID,
-			UserID:       userID,
-			Name:         "llama-8b-u1-c1-t1",
-			DisplayName:  "Trained Model",
-			ModelType:    storage.ModelTypeTrained,
-			BaseModel:    "llama-8b",
-			ModelSize:    "8B",
-			Status:       storage.ModelStatusReady,
-			PhysicalPath: "/mnt/cold-storage/contents/dcp/llama-8b-u1-c1-t1",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		}
-
-		return txn.SetModel(userID, &model)
 	})
 
 	require.NoError(t, err)

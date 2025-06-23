@@ -103,33 +103,6 @@ func TestGetUserModelsReverse(t *testing.T) {
 	}
 }
 
-func TestGetModelIterations(t *testing.T) {
-	client := NewDatabaseClient(t.TempDir())
-	require.NoError(t, client.Setup())
-	defer client.Close()
-
-	modelID := db.NewDigest([]byte("model1"))
-	iterations := createTestModelIterations(t, client, modelID, 10)
-
-	var result []*ModelIteration
-	require.NoError(t, client.View(func(txn db.Transaction) error {
-		var err error
-		result, err = client.GetModelIterationsReverse(txn, modelID.Bytes(), 10, 5)
-		return err
-	}))
-	require.Len(t, result, 5)
-	// Reverse the order of created iterations so they match the order in the response
-	for i, j := 0, len(iterations)-1; i < j; i, j = i+1, j-1 {
-		iterations[i], iterations[j] = iterations[j], iterations[i]
-	}
-
-	for i := 0; i < 5; i++ {
-		require.Equal(t, iterations[i].ID, result[i].ID)
-		require.Equal(t, iterations[i].Description, result[i].Description)
-		require.Equal(t, iterations[i].Index, result[i].Index)
-	}
-}
-
 func TestSecondaryIndexes(t *testing.T) {
 	client := NewDatabaseClient(t.TempDir())
 	require.NoError(t, client.Setup())
@@ -138,18 +111,12 @@ func TestSecondaryIndexes(t *testing.T) {
 	userID := db.NewDigest([]byte("user1"))
 	spaceID := db.NewDigest([]byte("space1"))
 	threadID := db.NewDigest([]byte("thread1"))
-	modelID := db.NewDigest([]byte("model1"))
 
 	// Create test data
 	spaces := createTestSpaces(t, client, userID, 5)
 	threads := createTestThreads(t, client, spaceID, 5)
 	messages := createTestMessages(t, client, threadID, 5)
 	models := createTestModels(t, client, userID, 5)
-	iterations := createTestModelIterations(t, client, modelID, 5)
-	// Reverse the order of created iterations so they match the order in the response
-	for i, j := 0, len(iterations)-1; i < j; i, j = i+1, j-1 {
-		iterations[i], iterations[j] = iterations[j], iterations[i]
-	}
 
 	t.Run("GetUserSpacesReverse", func(t *testing.T) {
 		var result []*Space
@@ -207,21 +174,6 @@ func TestSecondaryIndexes(t *testing.T) {
 		}
 	})
 
-	t.Run("GetModelIterations", func(t *testing.T) {
-		var result []*ModelIteration
-		require.NoError(t, client.View(func(txn db.Transaction) error {
-			var err error
-			result, err = client.GetModelIterationsReverse(txn, modelID.Bytes(), 10, 3)
-			return err
-		}))
-		require.Len(t, result, 3)
-		for i := 0; i < 3; i++ {
-			require.Equal(t, iterations[i].ID, result[i].ID)
-			require.Equal(t, iterations[i].Description, result[i].Description)
-			require.Equal(t, iterations[i].Index, result[i].Index)
-		}
-	})
-
 	t.Run("DeleteUserSpace", func(t *testing.T) {
 		var result []*Space
 		require.NoError(t, client.Update(func(txn db.Transaction) error {
@@ -259,19 +211,6 @@ func TestSecondaryIndexes(t *testing.T) {
 		}))
 		require.Len(t, result, 4)
 		require.NotEqual(t, models[2].ID, result[2].ID)
-	})
-
-	t.Run("DeleteModelIteration", func(t *testing.T) {
-		var result []*ModelIteration
-		require.NoError(t, client.Update(func(txn db.Transaction) error {
-			err := client.DeleteModelIteration(txn, modelID, 2)
-			require.NoError(t, err)
-
-			result, err = client.GetModelIterationsReverse(txn, modelID.Bytes(), 10, 5)
-			return err
-		}))
-		require.Len(t, result, 4)
-		require.NotEqual(t, iterations[2].ID, result[2].ID)
 	})
 }
 
@@ -367,22 +306,128 @@ func createTestModels(t *testing.T, client *DatabaseClient, userID db.Digest, co
 	return models
 }
 
-func createTestModelIterations(t *testing.T, client *DatabaseClient, modelID db.Digest, count int) []*ModelIteration {
-	iterations := make([]*ModelIteration, count)
-	require.NoError(t, client.Update(func(txn db.Transaction) error {
-		for i := 0; i < count; i++ {
-			iteration := &ModelIteration{
-				ID:          db.NewDigest([]byte(fmt.Sprintf("iteration%d", i))),
-				ModelID:     modelID,
-				Description: fmt.Sprintf("Iteration %d", i),
-				CreatedAt:   time.Now().Add(time.Duration(i) * time.Minute),
-				Index:       uint64(i),
-			}
-			err := client.SetModelIteration(txn, modelID, uint64(i), iteration)
-			require.NoError(t, err)
-			iterations[i] = iteration
+func TestGetModelsByParent(t *testing.T) {
+	dbManager, err := NewDatabaseManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, dbManager.Setup())
+	defer dbManager.Close()
+
+	// Create a parent model
+	parentID := db.NewDigest([]byte("parent-model"))
+	userID := db.NewDigest([]byte("test-user"))
+
+	// Create parent model
+	err = dbManager.Update(func(txn *DatabaseTransaction) error {
+		parent := &ModelInfo{
+			ID:             parentID,
+			UserID:         userID,
+			Name:           "llama-8b",
+			ModelType:      ModelTypeBase,
+			BaseModel:      "llama-8b",
+			ModelSize:      "8B",
+			Status:         ModelStatusReady,
+			CheckpointPath: "/mnt/storage/llama-8b",
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		}
-		return nil
-	}))
-	return iterations
+		return txn.SetModel(userID, parent)
+	})
+	require.NoError(t, err)
+
+	// Create child models
+	var childModels []*ModelInfo
+	for i := 0; i < 5; i++ {
+		childID := db.NewDigest([]byte(fmt.Sprintf("child-%d", i)))
+		child := &ModelInfo{
+			ID:             childID,
+			UserID:         userID,
+			Name:           fmt.Sprintf("llama-8b-u1-c%d", i+1),
+			ModelType:      ModelTypeClone,
+			BaseModel:      "llama-8b",
+			ModelSize:      "8B",
+			ParentID:       &parentID,
+			Status:         ModelStatusReady,
+			CheckpointPath: "/mnt/storage/llama-8b",
+			CreatedAt:      time.Now().Add(time.Duration(i) * time.Minute),
+			UpdatedAt:      time.Now().Add(time.Duration(i) * time.Minute),
+		}
+		childModels = append(childModels, child)
+
+		err := dbManager.Update(func(txn *DatabaseTransaction) error {
+			return txn.SetModel(userID, child)
+		})
+		require.NoError(t, err)
+	}
+
+	// Test retrieving children
+	var result []*ModelInfo
+	err = dbManager.View(func(txn *DatabaseTransaction) error {
+		var err error
+		result, err = txn.GetModelsByParent(parentID, 3, uint64(time.Now().Add(time.Hour).UnixNano()))
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 3)
+
+	// Should get most recent 3 children in reverse order
+	for i := 0; i < 3; i++ {
+		require.Equal(t, childModels[4-i].ID, result[i].ID)
+		require.Equal(t, childModels[4-i].Name, result[i].Name)
+	}
+}
+
+func TestParentIndexDeletion(t *testing.T) {
+	dbManager, err := NewDatabaseManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, dbManager.Setup())
+	defer dbManager.Close()
+
+	parentID := db.NewDigest([]byte("parent"))
+	childID := db.NewDigest([]byte("child"))
+	userID := db.NewDigest([]byte("user"))
+
+	// Create parent and child
+	err = dbManager.Update(func(txn *DatabaseTransaction) error {
+		child := &ModelInfo{
+			ID:             childID,
+			UserID:         userID,
+			Name:           "child-model",
+			ModelType:      ModelTypeClone,
+			ParentID:       &parentID,
+			Status:         ModelStatusReady,
+			CheckpointPath: "/path",
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+
+		return txn.SetModel(userID, child)
+	})
+	require.NoError(t, err)
+
+	// Verify child exists in parent index
+	var result []*ModelInfo
+	err = dbManager.View(func(txn *DatabaseTransaction) error {
+		var err error
+		result, err = txn.GetModelsByParent(parentID, 10, uint64(time.Now().Add(time.Hour).UnixNano()))
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	// Delete model (which should also remove from parent index)
+	err = dbManager.Update(func(txn *DatabaseTransaction) error {
+		// In real usage, we'd have a DeleteModel method that handles the parent index
+		// For now, let's just test the low-level deletion
+		return txn.client.DeleteModelParent(txn.txn, parentID, result[0].UpdatedAt)
+	})
+	require.NoError(t, err)
+
+	// Verify deletion
+	err = dbManager.View(func(txn *DatabaseTransaction) error {
+		var err error
+		result, err = txn.GetModelsByParent(parentID, 10, uint64(time.Now().Add(time.Hour).UnixNano()))
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 0)
 }

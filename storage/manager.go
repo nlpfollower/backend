@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/nlpfollower/deltamind/database/db"
 	"github.com/pkg/errors"
-	"math"
 	"os"
 	"path/filepath"
 )
@@ -325,6 +324,14 @@ func (dbTxn *DatabaseTransaction) SetModel(userID db.Digest, model *ModelInfo) e
 		return errors.Wrap(err, "SetModel: failed to set user model")
 	}
 
+	// If model has a parent, add to parent index
+	if model.ParentID != nil {
+		err = dbTxn.client.SetModelParent(dbTxn.txn, *model.ParentID, model.UpdatedAt, model)
+		if err != nil {
+			return errors.Wrap(err, "SetModel: failed to set model parent index")
+		}
+	}
+
 	return nil
 }
 
@@ -358,50 +365,25 @@ func (dbTxn *DatabaseTransaction) DeleteModel(modelID db.Digest) error {
 	return nil
 }
 
-// ==========================
-// ModelIteration operations
-// ==========================
-func (dbTxn *DatabaseTransaction) SetModelIteration(modelID db.Digest, iteration *ModelIteration) error {
-	if iteration == nil {
-		return errors.New("SetModelIteration: iteration is nil")
-	}
-
-	// Ensure the previous iteration exists, unless it's the first iteration
-	if iteration.Index > 0 {
-		latestIterations, err := dbTxn.client.GetModelIterationsReverse(dbTxn.txn, modelID.Bytes(), math.MaxUint64, 1)
-		if err != nil {
-			return errors.Wrap(err, "SetModelIteration: failed to get latest iteration")
-		}
-		if len(latestIterations) == 0 {
-			return fmt.Errorf("SetModelIteration: previous iteration (index %d) does not exist", iteration.Index-1)
-		}
-	}
-
-	err := dbTxn.client.SetModelIteration(dbTxn.txn, modelID, iteration.Index, iteration)
-	if err != nil {
-		return errors.Wrap(err, "SetModelIteration: failed to set model iteration")
-	}
-
-	return nil
+func (dbTxn *DatabaseTransaction) GetModelsByParent(parentID db.Digest, limit int, maxTimestamp uint64) ([]*ModelInfo, error) {
+	return dbTxn.client.GetModelsByParentReverse(dbTxn.txn, parentID.Bytes(), maxTimestamp, limit)
 }
 
-func (dbTxn *DatabaseTransaction) GetModelIterations(modelID db.Digest, maxIndex, limit uint64) ([]*ModelIteration, error) {
-	return dbTxn.client.GetModelIterationsReverse(dbTxn.txn, modelID.Bytes(), maxIndex, limit)
-}
-
-func (dbTxn *DatabaseTransaction) DeleteModelIteration(modelID db.Digest, index uint64) error {
-	iterations, err := dbTxn.client.GetModelIterationsReverse(dbTxn.txn, modelID.Bytes(), index, 1)
+func (dbTxn *DatabaseTransaction) GetUserAndIncrementCloneNum(userID db.Digest) (*User, uint64, error) {
+	user, err := dbTxn.client.GetUser(dbTxn.txn, userID)
 	if err != nil {
-		return errors.Wrap(err, "DeleteModelIteration: failed to get iteration")
+		return nil, 0, errors.Wrap(err, "failed to get user")
 	}
-	if len(iterations) == 0 {
-		return fmt.Errorf("DeleteModelIteration: iteration not found for model ID: %s and index: %d", modelID, index)
-	}
-
-	err = dbTxn.client.DeleteModelIteration(dbTxn.txn, modelID, index)
-	if err != nil {
-		return errors.Wrap(err, "DeleteModelIteration: failed to delete model iteration")
+	if user == nil {
+		return nil, 0, errors.New("user not found")
 	}
 
-	return nil
+	cloneNum := user.NextCloneNum
+	user.NextCloneNum++
+
+	if err := dbTxn.client.SetUser(dbTxn.txn, user); err != nil {
+		return nil, 0, errors.Wrap(err, "failed to update user")
+	}
+
+	return user, cloneNum, nil
 }

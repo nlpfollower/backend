@@ -191,42 +191,6 @@ func (nc *NexusClient) EnqueueSession(sessionReq *core.SessionRequest) (<-chan *
 	return responseChan, nil
 }
 
-// EnqueueModelClone sends a model clone request to Nexus
-func (nc *NexusClient) EnqueueModelClone(cloneReq *core.CloneModelRequest) (<-chan *core.WrappedResponse, error) {
-	responseChan := make(chan *core.WrappedResponse, 1)
-	requestID := db.NewDigest([]byte(fmt.Sprintf("clone-%d", time.Now().UnixNano())))
-
-	wrappedReq, err := core.NewWrappedRequest(requestID, cloneReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	nc.requestMapMu.Lock()
-	nc.requestMap[requestID.String()] = responseChan
-	nc.requestMapMu.Unlock()
-
-	nc.requestQueue <- wrappedReq
-	return responseChan, nil
-}
-
-// EnqueueCloneStatus checks the status of a clone operation
-func (nc *NexusClient) EnqueueCloneStatus(statusReq *core.CloneStatusRequest) (<-chan *core.WrappedResponse, error) {
-	responseChan := make(chan *core.WrappedResponse, 1)
-	requestID := db.NewDigest([]byte(fmt.Sprintf("clone-status-%d", time.Now().UnixNano())))
-
-	wrappedReq, err := core.NewWrappedRequest(requestID, statusReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	nc.requestMapMu.Lock()
-	nc.requestMap[requestID.String()] = responseChan
-	nc.requestMapMu.Unlock()
-
-	nc.requestQueue <- wrappedReq
-	return responseChan, nil
-}
-
 // Update isResponseFinal to handle session responses
 func (nc *NexusClient) isResponseFinal(response *core.WrappedResponse) bool {
 	// Try inference response first
@@ -238,18 +202,6 @@ func (nc *NexusClient) isResponseFinal(response *core.WrappedResponse) bool {
 	// Session responses are always final
 	var sessionResp core.SessionResponse
 	if err := json.Unmarshal(response.Data, &sessionResp); err == nil {
-		return true
-	}
-
-	// Clone responses are always final
-	var cloneResp core.CloneModelResponse
-	if err := json.Unmarshal(response.Data, &cloneResp); err == nil {
-		return true
-	}
-
-	// Clone status responses are always final
-	var cloneStatusResp core.CloneStatusResponse
-	if err := json.Unmarshal(response.Data, &cloneStatusResp); err == nil {
 		return true
 	}
 

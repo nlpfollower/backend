@@ -45,9 +45,9 @@ const (
 	// DBSecondaryUserModelPrefix is used to store user's models
 	// <DBSecondaryContext><DBSecondaryUserModelPrefix><UserID><Timestamp> -> <ModelInfo>
 	DBSecondaryUserModelPrefix byte = 0x03
-	// DBSecondaryModelIterationPrefix is used to store model's iterations
-	// <DBSecondaryContext><DBSecondaryModelIterationPrefix><ModelID><Index> -> <ModelIteration>
-	DBSecondaryModelIterationPrefix byte = 0x04
+	// DBSecondaryModelParentPrefix is used to store models by parent
+	// <DBSecondaryContext><DBSecondaryModelParentPrefix><ParentID><Timestamp> -> <ModelInfo>
+	DBSecondaryModelParentPrefix byte = 0x04
 )
 
 type DatabaseClient struct {
@@ -124,11 +124,10 @@ func (client *DatabaseClient) getKeyForSecondaryUserModel(userID []byte, timesta
 	return ctx, key
 }
 
-func (client *DatabaseClient) getKeyForSecondaryModelIteration(modelID []byte, index uint64) (db.Context, []byte) {
-	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryModelIterationPrefix})
-	indexBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(indexBytes, index)
-	key := append(modelID, indexBytes...)
+func (client *DatabaseClient) getKeyForSecondaryModelParent(parentID []byte, timestamp time.Time) (db.Context, []byte) {
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryModelParentPrefix})
+	ts := NewTimestamp(timestamp)
+	key := append(parentID, ts[:]...)
 	return ctx, key
 }
 
@@ -522,60 +521,56 @@ func (client *DatabaseClient) GetUserModelsReverse(txn db.Transaction, userID []
 	return models, nil
 }
 
-// ==========================
-// Secondary Model Iteration operations
-// ==========================
-func (client *DatabaseClient) SetModelIteration(txn db.Transaction, modelID db.Digest, index uint64, iteration *ModelIteration) error {
-	ctx, key := client.getKeyForSecondaryModelIteration(modelID.Bytes(), index)
-	iterationBytes, err := json.Marshal(iteration)
+func (client *DatabaseClient) SetModelParent(txn db.Transaction, parentID db.Digest, timestamp time.Time, model *ModelInfo) error {
+	ctx, key := client.getKeyForSecondaryModelParent(parentID.Bytes(), timestamp)
+	modelBytes, err := json.Marshal(model)
 	if err != nil {
-		return errors.Wrap(err, "SetModelIteration: failed to marshal iteration")
+		return errors.Wrap(err, "SetModelParent: failed to marshal model")
 	}
-	return txn.Set(key, iterationBytes, ctx)
+	return txn.Set(key, modelBytes, ctx)
 }
 
-func (client *DatabaseClient) DeleteModelIteration(txn db.Transaction, modelID db.Digest, index uint64) error {
-	ctx, key := client.getKeyForSecondaryModelIteration(modelID.Bytes(), index)
+func (client *DatabaseClient) DeleteModelParent(txn db.Transaction, parentID db.Digest, timestamp time.Time) error {
+	ctx, key := client.getKeyForSecondaryModelParent(parentID.Bytes(), timestamp)
 	return txn.Delete(key, ctx)
 }
 
-func (client *DatabaseClient) GetModelIterationsReverse(txn db.Transaction, modelID []byte, maxIndex, limit uint64) ([]*ModelIteration, error) {
-	var iterations []*ModelIteration
-	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryModelIterationPrefix})
-	it, err := txn.GetIterator(modelID, ctx)
+func (client *DatabaseClient) GetModelsByParentReverse(txn db.Transaction, parentID []byte, maxTimestamp uint64, limit int) ([]*ModelInfo, error) {
+	var models []*ModelInfo
+	ctx := client.GetContext([]byte{DBSecondaryContext, DBSecondaryModelParentPrefix})
+	it, err := txn.GetIterator(parentID, ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "GetModelIterationsReverse: failed to get iterator")
+		return nil, errors.Wrap(err, "GetModelsByParentReverse: failed to get iterator")
 	}
 	defer it.Close()
 
-	indexBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(indexBytes, maxIndex)
+	ts := NewTimestampFromUint64(maxTimestamp)
 
-	if !it.Seek(indexBytes) {
+	if !it.Seek(ts[:]) {
 		if !it.Last() {
-			return iterations, nil
+			return models, nil
 		}
 	} else {
 		if !it.Prev() {
-			return iterations, nil
+			return models, nil
 		}
 	}
 
-	for i := uint64(0); i < limit && it.Valid(); i++ {
-		iterationBytes, err := it.Value()
+	for i := 0; i < limit && it.Valid(); i++ {
+		modelBytes, err := it.Value()
 		if err != nil {
-			return nil, errors.Wrap(err, "GetModelIterationsReverse: failed to get iteration")
+			return nil, errors.Wrap(err, "GetModelsByParentReverse: failed to get model")
 		}
-		var iteration ModelIteration
-		if err := json.Unmarshal(iterationBytes, &iteration); err != nil {
-			return nil, errors.Wrap(err, "GetModelIterationsReverse: failed to unmarshal iteration")
+		var model ModelInfo
+		if err := json.Unmarshal(modelBytes, &model); err != nil {
+			return nil, errors.Wrap(err, "GetModelsByParentReverse: failed to unmarshal model")
 		}
-		iterations = append(iterations, &iteration)
+		models = append(models, &model)
 		if !it.Prev() {
 			break
 		}
 	}
-	return iterations, nil
+	return models, nil
 }
 
 func makeTimeKey(timestamp time.Time) []byte {
