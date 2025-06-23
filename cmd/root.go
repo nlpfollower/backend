@@ -44,6 +44,8 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(NewDeleteUserCommand())
 	rootCmd.AddCommand(NewGetThreadsCommand())
 	rootCmd.AddCommand(NewGetSpacesCommand())
+	rootCmd.AddCommand(NewAddBaseModelCommand())
+	rootCmd.AddCommand(NewListModelsCommand())
 
 	return rootCmd
 }

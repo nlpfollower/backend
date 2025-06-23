@@ -43,11 +43,16 @@ func (router *APIRouter) SetupRoutes(mux *mux.Router) {
 	mux.HandleFunc("/api/v0/get-models", router.GetModels).Methods("POST")
 	mux.HandleFunc("/api/v0/delete-model", router.DeleteModel).Methods("POST")
 
-	// Model Iteration routes
-	mux.HandleFunc("/api/v0/create-model-iteration", router.CreateModelIteration).Methods("POST")
-	mux.HandleFunc("/api/v0/get-model-iterations", router.GetModelIterations).Methods("POST")
+	// Model clone routes
+	mux.HandleFunc("/api/v0/clone-model", router.CloneModel).Methods("POST")
+	mux.HandleFunc("/api/v0/get-clone-status", router.GetCloneStatus).Methods("POST")
+	mux.HandleFunc("/api/v0/get-user-models", router.GetUserCloneableModels).Methods("POST")
 
-	// Session management routes (all POST for consistency)
+	// Model Iteration routes
+	//mux.HandleFunc("/api/v0/create-model-iteration", router.CreateModelIteration).Methods("POST")
+	//mux.HandleFunc("/api/v0/get-model-iterations", router.GetModelIterations).Methods("POST")
+
+	// Session management routes
 	mux.HandleFunc("/api/v0/session/start", router.StartSession).Methods("POST")
 	mux.HandleFunc("/api/v0/session/status", router.GetSessionStatus).Methods("POST")
 	mux.HandleFunc("/api/v0/session/extend", router.ExtendSession).Methods("POST")
