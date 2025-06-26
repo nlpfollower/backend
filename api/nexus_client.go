@@ -185,7 +185,7 @@ func (nc *NexusClient) GetTrainingStatus(statusReq *core.TrainingStatusRequest) 
 	return responseChan, nil
 }
 
-func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID string, messages []core.Message, checkpointPath string) (<-chan *core.WrappedResponse, error) {
+func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID string, messages []core.Message, checkpointPath string, modelSize string) (<-chan *core.WrappedResponse, error) {
 	responseChan := make(chan *core.WrappedResponse, 10) // Buffer for streaming responses
 	requestID := db.NewDigest([]byte(fmt.Sprintf("req-%d", time.Now().UnixNano())))
 
@@ -194,6 +194,7 @@ func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID string, messag
 		ModelID:        modelID,
 		Messages:       messages,
 		CheckpointPath: checkpointPath,
+		ModelSize:      modelSize,
 	}
 
 	wrappedReq, err := core.NewWrappedRequest(requestID, inferReq)
