@@ -326,7 +326,7 @@ func (wsh *WebSocketHandler) handleInferenceRequest(ws *websocket.Conn, userID s
 			checkpointPath = model.CheckpointPath
 		} else {
 			// Fallback for models without explicit checkpoint path
-			checkpointPath = fmt.Sprintf("/mnt/cold-storage/contents/dcp/%s/checkpoint", model.Name)
+			checkpointPath = fmt.Sprintf("/mnt/cold/contents/dcp/%s/checkpoint", model.Name)
 		}
 
 		// Now get the message chain

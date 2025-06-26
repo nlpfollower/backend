@@ -143,7 +143,7 @@ func TestNexusClient(t *testing.T) {
 		messages := []core.Message{
 			{Role: "user", Content: "Hello"},
 		}
-		checkpointPath := "/mnt/cold-storage/contents/dcp/llama-8b/checkpoint" // Add checkpoint path
+		checkpointPath := "/mnt/cold/contents/dcp/llama-8b/checkpoint" // Add checkpoint path
 
 		respChan, err := client.EnqueueInference(userID, modelID, messages, checkpointPath)
 		require.NoError(t, err)
@@ -190,7 +190,7 @@ func TestNexusClient(t *testing.T) {
 		messages := []core.Message{
 			{Role: "user", Content: "After reconnect"},
 		}
-		checkpointPath := "/mnt/cold-storage/contents/dcp/llama-8b/checkpoint" // Add checkpoint path
+		checkpointPath := "/mnt/cold/contents/dcp/llama-8b/checkpoint" // Add checkpoint path
 
 		respChan, err := client.EnqueueInference(userID, modelID, messages, checkpointPath)
 		require.NoError(t, err)

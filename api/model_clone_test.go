@@ -48,7 +48,7 @@ func TestModelCloning(t *testing.T) {
 		require.Equal(t, expectedName, resp.Model.Name)
 
 		// Verify checkpoint path was inherited
-		require.Equal(t, "/mnt/cold-storage/contents/dcp/llama-8b", resp.Model.CheckpointPath)
+		require.Equal(t, "/mnt/cold/contents/dcp/llama-8b/checkpoint", resp.Model.CheckpointPath)
 	})
 
 	// Test clone numbering increments properly
@@ -172,7 +172,7 @@ func TestCheckpointPathInheritance(t *testing.T) {
 	clone1Resp, err := performRequest[CloneModelRequest, CloneModelResponse](
 		t, ts, "POST", "/api/v0/clone-model", clone1Req)
 	require.NoError(t, err)
-	require.Equal(t, "/mnt/cold-storage/contents/dcp/llama-8b", clone1Resp.Model.CheckpointPath)
+	require.Equal(t, "/mnt/cold/contents/dcp/llama-8b/checkpoint", clone1Resp.Model.CheckpointPath)
 
 	// Verify name
 	userID, _ := db.DigestFromString(user.AuthToken.UserID)
@@ -194,7 +194,7 @@ func TestCheckpointPathInheritance(t *testing.T) {
 			ModelSize:      "8B",
 			ParentID:       &clone1Resp.Model.ID,
 			Status:         storage.ModelStatusReady,
-			CheckpointPath: fmt.Sprintf("/mnt/cold-storage/contents/dcp/llama-8b-u%s-c0-t1", userID.String()[:8]),
+			CheckpointPath: fmt.Sprintf("/mnt/cold/contents/dcp/llama-8b-u%s-c0-t1/checkpoint", userID.String()[:8]),
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
 		}
@@ -213,7 +213,7 @@ func TestCheckpointPathInheritance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should inherit the trained model's checkpoint, not create a chain
-	expectedCheckpoint := fmt.Sprintf("/mnt/cold-storage/contents/dcp/llama-8b-u%s-c0-t1", userID.String()[:8])
+	expectedCheckpoint := fmt.Sprintf("/mnt/cold/contents/dcp/llama-8b-u%s-c0-t1/checkpoint", userID.String()[:8])
 	require.Equal(t, expectedCheckpoint, clone2Resp.Model.CheckpointPath)
 
 	// Should be c1 (next clone number)
@@ -353,7 +353,7 @@ func addBaseModelDirectly(t *testing.T, dbManager *storage.DatabaseManager, mode
 			BaseModel:      modelName,
 			ModelSize:      modelSize,
 			Status:         storage.ModelStatusReady,
-			CheckpointPath: fmt.Sprintf("/mnt/cold-storage/contents/dcp/%s", modelName),
+			CheckpointPath: fmt.Sprintf("/mnt/cold/contents/dcp/%s/checkpoint", modelName),
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
 		}

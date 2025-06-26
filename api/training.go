@@ -147,7 +147,7 @@ func (router *APIRouter) StartTraining(w http.ResponseWriter, req *http.Request)
 			ModelSize:      sourceModel.ModelSize,
 			ParentID:       &sourceModel.ID,
 			Status:         storage.ModelStatusTraining,
-			CheckpointPath: fmt.Sprintf("/mnt/cold-storage/contents/dcp/%s", newModelName),
+			CheckpointPath: fmt.Sprintf("/mnt/cold/contents/dcp/%s/checkpoint", newModelName),
 			CreatedAt:      timeNow,
 			UpdatedAt:      timeNow,
 		}
