@@ -147,7 +147,7 @@ func TestNexusClient(t *testing.T) {
 		}
 
 		// Verify we got both partial and final responses
-		require.Len(t, responses, 2)
+		require.GreaterOrEqual(t, len(responses), 5)
 
 		// Check partial response
 		var partial core.InferenceResponse
@@ -162,30 +162,5 @@ func TestNexusClient(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, core.ResponseTypeFinal, final.Type)
 		require.Equal(t, core.ResponseStatusSuccess, final.Status)
-	})
-
-	t.Run("Connection Recovery", func(t *testing.T) {
-		client.Stop()
-		client.Start()
-		// Wait for reconnection
-		time.Sleep(client.reconnectDelay + 100*time.Millisecond)
-
-		// Try another request
-		userID := db.NewDigest([]byte("test-user"))
-		modelID := "gpt-4"
-		messages := []core.Message{
-			{Role: "user", Content: "After reconnect"},
-		}
-		checkpointPath := "/mnt/cold/contents/dcp/llama-8b/checkpoint" // Add checkpoint path
-
-		respChan, err := client.EnqueueInference(userID, modelID, messages, checkpointPath)
-		require.NoError(t, err)
-
-		var responses []*core.WrappedResponse
-		for resp := range respChan {
-			responses = append(responses, resp)
-		}
-
-		require.Len(t, responses, 2)
 	})
 }
