@@ -264,73 +264,125 @@ func (wsh *WebSocketHandler) handleInferenceRequest(ws *websocket.Conn, userID s
 
 	// Verify access and get message chain in a single transaction
 	err = wsh.dbManager.View(func(txn *storage.DatabaseTransaction) error {
+		log.Printf("DEBUG: Starting transaction for inference request")
+		log.Printf("DEBUG: LastMessageID.ID: %v", req.LastMessageID.ID)
+		log.Printf("DEBUG: LastMessageID.MessageID: %v", req.LastMessageID.MessageID)
+		log.Printf("DEBUG: ModelID: %s", req.ModelID)
+
 		// First verify the user has access to this message
 		lastMessage, err := txn.GetMessage(req.LastMessageID.ID)
 		if err != nil {
+			log.Printf("DEBUG: Error getting message: %v", err)
 			return fmt.Errorf("failed to get message: %v", err)
 		}
 		if lastMessage == nil {
+			log.Printf("DEBUG: Message not found for ID: %v", req.LastMessageID.ID)
 			return fmt.Errorf("message not found")
 		}
+		log.Printf("DEBUG: Found message, ThreadID: %v", lastMessage.ThreadID)
 
 		// Get the parent thread
 		thread, err := txn.GetThread(lastMessage.ThreadID)
 		if err != nil {
+			log.Printf("DEBUG: Error getting thread: %v", err)
 			return fmt.Errorf("failed to get thread: %v", err)
 		}
+		if thread == nil {
+			log.Printf("DEBUG: Thread is nil for ID: %v", lastMessage.ThreadID)
+			return fmt.Errorf("thread not found")
+		}
+		log.Printf("DEBUG: Found thread, SpaceID: %v", thread.SpaceID)
 
 		// Get the parent space
 		space, err := txn.GetSpace(thread.SpaceID)
 		if err != nil {
+			log.Printf("DEBUG: Error getting space: %v", err)
 			return fmt.Errorf("failed to get space: %v", err)
 		}
+		if space == nil {
+			log.Printf("DEBUG: Space is nil for ID: %v", thread.SpaceID)
+			return fmt.Errorf("space not found")
+		}
+		log.Printf("DEBUG: Found space, UserID: %v, checking against: %v", space.UserID, userIDDigest)
 
 		// Verify user has access
 		if space.UserID != userIDDigest {
+			log.Printf("DEBUG: User access denied - space.UserID: %v, userIDDigest: %v", space.UserID, userIDDigest)
 			return fmt.Errorf("user does not have access to this thread")
 		}
+		log.Printf("DEBUG: User has access, proceeding to get model")
 
-		// NEW: Get model info to retrieve checkpoint path
+		// Get model info to retrieve checkpoint path
+		var model *storage.ModelInfo
+
+		// First try direct lookup
 		modelDigest := db.NewDigest([]byte(req.ModelID))
-		model, err := txn.GetModel(modelDigest)
-		if err != nil {
+		log.Printf("DEBUG: Looking up model with digest: %v (from ModelID: %s)", modelDigest, req.ModelID)
+
+		model, err = txn.GetModel(modelDigest)
+		log.Printf("DEBUG: Direct model lookup result - model: %v, err: %v", model, err)
+
+		if err != nil || model == nil {
+			log.Printf("DEBUG: Direct lookup failed, trying fallback methods")
+
 			// Try to get by name if digest lookup fails
-			// This is a fallback for when ModelID is actually the name
 			models, err := txn.GetUserModels(userIDDigest, 100, uint64(time.Now().UnixNano()))
 			if err != nil {
+				log.Printf("DEBUG: Failed to get user models: %v", err)
 				return fmt.Errorf("failed to get user models: %v", err)
 			}
+			log.Printf("DEBUG: Found %d user models", len(models))
 
 			// Also check base models
 			systemUserID := db.NewDigest([]byte("system-base-models"))
+			log.Printf("DEBUG: Looking up base models with systemUserID: %v", systemUserID)
+
 			baseModels, err := txn.GetUserModels(systemUserID, 10, uint64(time.Now().UnixNano()))
 			if err == nil {
+				log.Printf("DEBUG: Found %d base models", len(baseModels))
 				models = append(models, baseModels...)
+			} else {
+				log.Printf("DEBUG: Error getting base models: %v", err)
 			}
 
 			// Find model by name
-			for _, m := range models {
+			log.Printf("DEBUG: Searching through %d total models for name: %s", len(models), req.ModelID)
+			for i, m := range models {
+				log.Printf("DEBUG: Model[%d] - Name: %s, ID: %v", i, m.Name, m.ID)
 				if m.Name == req.ModelID {
 					model = m
+					log.Printf("DEBUG: Found matching model by name!")
 					break
 				}
 			}
 
 			if model == nil {
+				log.Printf("DEBUG: Model still nil after all lookups")
 				return fmt.Errorf("model not found: %s", req.ModelID)
 			}
 		}
 
+		log.Printf("DEBUG: Model found - Name: %s, CheckpointPath: %s", model.Name, model.CheckpointPath)
+
 		// Resolve checkpoint path
 		if model.CheckpointPath != "" {
 			checkpointPath = model.CheckpointPath
+			log.Printf("DEBUG: Using model's checkpoint path: %s", checkpointPath)
 		} else {
 			// Fallback for models without explicit checkpoint path
 			checkpointPath = fmt.Sprintf("/mnt/cold/contents/dcp/%s/checkpoint", model.Name)
+			log.Printf("DEBUG: Using fallback checkpoint path: %s", checkpointPath)
 		}
 
 		// Now get the message chain
+		log.Printf("DEBUG: Getting message path for ID: %v, MessageID: %d", req.LastMessageID.ID, req.LastMessageID.MessageID)
 		messages, err = txn.GetMessagePath(req.LastMessageID.ID, req.LastMessageID.MessageID, MaxHistoryMessages)
+		if err != nil {
+			log.Printf("DEBUG: Error getting message path: %v", err)
+		} else {
+			log.Printf("DEBUG: Got %d messages in path", len(messages))
+		}
+
 		return err
 	})
 
