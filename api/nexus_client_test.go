@@ -158,7 +158,7 @@ func TestNexusClient(t *testing.T) {
 
 		// Check final response
 		var final core.InferenceResponse
-		err = json.Unmarshal(responses[1].Data, &final)
+		err = json.Unmarshal(responses[len(responses)-1].Data, &final)
 		require.NoError(t, err)
 		require.Equal(t, core.ResponseTypeFinal, final.Type)
 		require.Equal(t, core.ResponseStatusSuccess, final.Status)
