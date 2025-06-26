@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"github.com/nlpfollower/deltamind/backend/api"
@@ -54,8 +53,8 @@ func addBaseModel(dbPath, modelName, modelSize, checkpointPath string) error {
 	}
 	defer dbManager.Close()
 
-	// Generate deterministic model ID based on model name
-	modelIDBytes := generateModelID(modelName)
+	// Generate model ID directly from model name - same pattern as WebSocket handler
+	modelID := db.NewDigest([]byte(modelName))
 
 	// Create a special system user ID for base models
 	systemUserID := db.NewDigest([]byte("system-base-models"))
@@ -63,14 +62,14 @@ func addBaseModel(dbPath, modelName, modelSize, checkpointPath string) error {
 	// Create the base model
 	err = dbManager.Update(func(txn *storage.DatabaseTransaction) error {
 		// Check if model already exists
-		existingModel, _ := txn.GetModel(db.NewDigest(modelIDBytes))
+		existingModel, _ := txn.GetModel(modelID)
 		if existingModel != nil {
 			return fmt.Errorf("model %s already exists", modelName)
 		}
 
 		timeNow := time.Now()
 		model := storage.ModelInfo{
-			ID:             db.NewDigest(modelIDBytes),
+			ID:             modelID,
 			UserID:         systemUserID,
 			Name:           modelName,
 			DisplayName:    modelName,
@@ -95,15 +94,9 @@ func addBaseModel(dbPath, modelName, modelSize, checkpointPath string) error {
 	}
 
 	fmt.Printf("Base model %s added successfully\n", modelName)
-	fmt.Printf("  ID: %x\n", modelIDBytes)
+	fmt.Printf("  ID: %s\n", modelID.String())
 	fmt.Printf("  Path: %s\n", checkpointPath)
 	return nil
-}
-
-// generateModelID creates a deterministic 32-byte ID from a model name
-func generateModelID(modelName string) []byte {
-	hash := sha256.Sum256([]byte("base-model:" + modelName))
-	return hash[:]
 }
 
 func NewListModelsCommand() *cobra.Command {
@@ -278,9 +271,8 @@ func deleteModel(dbPath, modelID, modelName string, force bool) error {
 				return fmt.Errorf("failed to get model: %v", err)
 			}
 		} else {
-			// Delete by name (for base models)
-			modelIDBytes := generateModelID(modelName)
-			modelDigest = db.NewDigest(modelIDBytes)
+			// Delete by name - just use the name as bytes for the digest
+			modelDigest = db.NewDigest([]byte(modelName))
 			model, err = txn.GetModel(modelDigest)
 			if err != nil {
 				return fmt.Errorf("failed to get model: %v", err)
