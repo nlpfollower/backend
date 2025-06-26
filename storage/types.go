@@ -49,14 +49,23 @@ type CompoundMessageID struct {
 	MessageID uint64    `json:"message_id"`
 }
 
+type MessageAttachment struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	Lines   int    `json:"lines,omitempty"`
+	Content string `json:"content"`
+}
+
 type CompoundMessage struct {
-	ID        db.Digest          `json:"id"`
-	ThreadID  db.Digest          `json:"thread_id"`
-	ParentID  *CompoundMessageID `json:"parent_id,omitempty"`
-	Author    string             `json:"author"`
-	Messages  []string           `json:"messages"`
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
+	ID          db.Digest           `json:"id"`
+	ThreadID    db.Digest           `json:"thread_id"`
+	ParentID    *CompoundMessageID  `json:"parent_id,omitempty"`
+	Author      string              `json:"author"`
+	Messages    []string            `json:"messages"`
+	Attachments []MessageAttachment `json:"attachments,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
 }
 
 func NewKeyFromUint64(value uint64) db.Digest {

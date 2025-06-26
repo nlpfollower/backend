@@ -10,11 +10,12 @@ import (
 )
 
 type CreateMessageRequest struct {
-	ThreadID  db.Digest                  `json:"thread_id"`
-	ParentID  *storage.CompoundMessageID `json:"parent_id,omitempty"`
-	Author    string                     `json:"author"`
-	Content   string                     `json:"content"`
-	AuthToken AuthToken                  `json:"auth_token"`
+	ThreadID    db.Digest                   `json:"thread_id"`
+	ParentID    *storage.CompoundMessageID  `json:"parent_id,omitempty"`
+	Author      string                      `json:"author"`
+	Content     string                      `json:"content"`
+	Attachments []storage.MessageAttachment `json:"attachments,omitempty"`
+	AuthToken   AuthToken                   `json:"auth_token"`
 }
 
 type CreateMessageResponse struct {
