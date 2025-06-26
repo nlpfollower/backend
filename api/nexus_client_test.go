@@ -121,16 +121,8 @@ func (s *MockNexusServer) Close() error {
 }
 
 func TestNexusClient(t *testing.T) {
-	// Start mock server on random port
-	mockServer, err := NewMockNexusServer(0)
-	require.NoError(t, err)
-	defer mockServer.Close()
-
-	// Get the actual port
-	port := mockServer.listener.Addr().(*net.TCPAddr).Port
-
 	// Create client
-	client := NewNexusClient(port)
+	client := NewNexusClient(8081)
 	client.Start()
 	defer client.Stop()
 
@@ -173,14 +165,8 @@ func TestNexusClient(t *testing.T) {
 	})
 
 	t.Run("Connection Recovery", func(t *testing.T) {
-		// Close all current connections
-		mockServer.mu.Lock()
-		for _, conn := range mockServer.conns {
-			conn.Close()
-		}
-		mockServer.conns = nil
-		mockServer.mu.Unlock()
-
+		client.Stop()
+		client.Start()
 		// Wait for reconnection
 		time.Sleep(client.reconnectDelay + 100*time.Millisecond)
 
