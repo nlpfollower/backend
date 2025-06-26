@@ -10,20 +10,20 @@ import (
 )
 
 func NewAddBaseModelCommand() *cobra.Command {
-	var modelName, modelSize, physicalPath string
+	var modelName, modelSize, checkpointPath string
 
 	cmd := &cobra.Command{
 		Use:   "add-base-model",
 		Short: "Add a base model (llama-8b or llama-70b)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := getConfig(cmd)
-			return addBaseModel(cfg.DBPath, modelName, modelSize, physicalPath)
+			return addBaseModel(cfg.DBPath, modelName, modelSize, checkpointPath)
 		},
 	}
 
 	cmd.Flags().StringVar(&modelName, "name", "", "Model name (llama-8b or llama-70b)")
 	cmd.Flags().StringVar(&modelSize, "size", "", "Model size (8B or 70B)")
-	cmd.Flags().StringVar(&physicalPath, "path", "", "Physical path to model")
+	cmd.Flags().StringVar(&checkpointPath, "path", "", "Physical path to model")
 	cmd.MarkFlagRequired("name")
 	cmd.MarkFlagRequired("size")
 	cmd.MarkFlagRequired("path")
@@ -31,7 +31,7 @@ func NewAddBaseModelCommand() *cobra.Command {
 	return cmd
 }
 
-func addBaseModel(dbPath, modelName, modelSize, physicalPath string) error {
+func addBaseModel(dbPath, modelName, modelSize, checkpointPath string) error {
 	// Validate model name
 	if modelName != "llama-8b" && modelName != "llama-70b" {
 		return fmt.Errorf("invalid model name: %s (must be llama-8b or llama-70b)", modelName)
@@ -65,17 +65,17 @@ func addBaseModel(dbPath, modelName, modelSize, physicalPath string) error {
 	err = dbManager.Update(func(txn *storage.DatabaseTransaction) error {
 		timeNow := time.Now()
 		model := storage.ModelInfo{
-			ID:           db.NewDigest(modelIDBytes),
-			UserID:       systemUserID,
-			Name:         modelName,
-			DisplayName:  modelName,
-			ModelType:    storage.ModelTypeBase,
-			BaseModel:    modelName,
-			ModelSize:    modelSize,
-			Status:       storage.ModelStatusReady,
-			PhysicalPath: physicalPath,
-			CreatedAt:    timeNow,
-			UpdatedAt:    timeNow,
+			ID:             db.NewDigest(modelIDBytes),
+			UserID:         systemUserID,
+			Name:           modelName,
+			DisplayName:    modelName,
+			ModelType:      storage.ModelTypeBase,
+			BaseModel:      modelName,
+			ModelSize:      modelSize,
+			Status:         storage.ModelStatusReady,
+			CheckpointPath: checkpointPath,
+			CreatedAt:      timeNow,
+			UpdatedAt:      timeNow,
 		}
 
 		if err := txn.SetModel(systemUserID, &model); err != nil {
@@ -89,7 +89,7 @@ func addBaseModel(dbPath, modelName, modelSize, physicalPath string) error {
 		return err
 	}
 
-	fmt.Printf("Base model %s added successfully at path: %s\n", modelName, physicalPath)
+	fmt.Printf("Base model %s added successfully at path: %s\n", modelName, checkpointPath)
 	return nil
 }
 
@@ -127,7 +127,7 @@ func listModels(dbPath string) error {
 		fmt.Printf("Found %d base models:\n", len(models))
 		for _, model := range models {
 			fmt.Printf("- %s (%s) - Status: %s, Path: %s\n",
-				model.Name, model.ModelSize, model.Status, model.PhysicalPath)
+				model.Name, model.ModelSize, model.Status, model.CheckpointPath)
 		}
 
 		return nil

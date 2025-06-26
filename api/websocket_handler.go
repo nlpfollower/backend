@@ -10,6 +10,7 @@ import (
 	"golang.org/x/net/websocket"
 	"io"
 	"log"
+	"time"
 )
 
 const MaxHistoryMessages = 10
@@ -259,6 +260,8 @@ func (wsh *WebSocketHandler) handleInferenceRequest(ws *websocket.Conn, userID s
 	}
 
 	var messages []*storage.CompoundMessage
+	var checkpointPath string // NEW: Track checkpoint path
+
 	// Verify access and get message chain in a single transaction
 	err = wsh.dbManager.View(func(txn *storage.DatabaseTransaction) error {
 		// First verify the user has access to this message
@@ -285,6 +288,45 @@ func (wsh *WebSocketHandler) handleInferenceRequest(ws *websocket.Conn, userID s
 		// Verify user has access
 		if space.UserID != userIDDigest {
 			return fmt.Errorf("user does not have access to this thread")
+		}
+
+		// NEW: Get model info to retrieve checkpoint path
+		modelDigest := db.NewDigest([]byte(req.ModelID))
+		model, err := txn.GetModel(modelDigest)
+		if err != nil {
+			// Try to get by name if digest lookup fails
+			// This is a fallback for when ModelID is actually the name
+			models, err := txn.GetUserModels(userIDDigest, 100, uint64(time.Now().UnixNano()))
+			if err != nil {
+				return fmt.Errorf("failed to get user models: %v", err)
+			}
+
+			// Also check base models
+			systemUserID := db.NewDigest([]byte("system-base-models"))
+			baseModels, err := txn.GetUserModels(systemUserID, 10, uint64(time.Now().UnixNano()))
+			if err == nil {
+				models = append(models, baseModels...)
+			}
+
+			// Find model by name
+			for _, m := range models {
+				if m.Name == req.ModelID {
+					model = m
+					break
+				}
+			}
+
+			if model == nil {
+				return fmt.Errorf("model not found: %s", req.ModelID)
+			}
+		}
+
+		// Resolve checkpoint path
+		if model.CheckpointPath != "" {
+			checkpointPath = model.CheckpointPath
+		} else {
+			// Fallback for models without explicit checkpoint path
+			checkpointPath = fmt.Sprintf("/mnt/cold-storage/contents/dcp/%s/checkpoint", model.Name)
 		}
 
 		// Now get the message chain
@@ -324,11 +366,12 @@ func (wsh *WebSocketHandler) handleInferenceRequest(ws *websocket.Conn, userID s
 		})
 	}
 
-	// Start inference
+	// Start inference with checkpoint path
 	responseChan, err := wsh.nexusClient.EnqueueInference(
 		userIDDigest,
 		req.ModelID,
 		contextMessages,
+		checkpointPath,
 	)
 	if err != nil {
 		resp := WSInferenceResponse{
@@ -339,6 +382,14 @@ func (wsh *WebSocketHandler) handleInferenceRequest(ws *websocket.Conn, userID s
 		sendTypedWSResponse(ws, resp)
 		return
 	}
+
+	// Add a "loading" response to indicate model is being loaded
+	loadingResp := WSInferenceResponse{
+		Status:  "loading",
+		Content: "Loading model...",
+		Type:    "partial",
+	}
+	sendTypedWSResponse(ws, loadingResp)
 
 	// Stream responses
 	for response := range responseChan {

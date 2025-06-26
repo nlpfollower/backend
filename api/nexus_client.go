@@ -151,14 +151,49 @@ func (nc *NexusClient) handleOutboundMessages() {
 	}
 }
 
-func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID string, messages []core.Message) (<-chan *core.WrappedResponse, error) {
+func (nc *NexusClient) EnqueueTraining(trainReq *core.TrainingRequest) (<-chan *core.WrappedResponse, error) {
+	responseChan := make(chan *core.WrappedResponse, 1)
+	requestID := db.NewDigest([]byte(fmt.Sprintf("train-%d", time.Now().UnixNano())))
+
+	wrappedReq, err := core.NewWrappedRequest(requestID, trainReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create training request: %w", err)
+	}
+
+	nc.requestMapMu.Lock()
+	nc.requestMap[requestID.String()] = responseChan
+	nc.requestMapMu.Unlock()
+
+	nc.requestQueue <- wrappedReq
+	return responseChan, nil
+}
+
+func (nc *NexusClient) GetTrainingStatus(statusReq *core.TrainingStatusRequest) (<-chan *core.WrappedResponse, error) {
+	responseChan := make(chan *core.WrappedResponse, 1)
+	requestID := db.NewDigest([]byte(fmt.Sprintf("train-status-%d", time.Now().UnixNano())))
+
+	wrappedReq, err := core.NewWrappedRequest(requestID, statusReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create training status request: %w", err)
+	}
+
+	nc.requestMapMu.Lock()
+	nc.requestMap[requestID.String()] = responseChan
+	nc.requestMapMu.Unlock()
+
+	nc.requestQueue <- wrappedReq
+	return responseChan, nil
+}
+
+func (nc *NexusClient) EnqueueInference(userID db.Digest, modelID string, messages []core.Message, checkpointPath string) (<-chan *core.WrappedResponse, error) {
 	responseChan := make(chan *core.WrappedResponse, 10) // Buffer for streaming responses
 	requestID := db.NewDigest([]byte(fmt.Sprintf("req-%d", time.Now().UnixNano())))
 
 	inferReq := &core.InferenceRequest{
-		UserID:   userID,
-		ModelID:  modelID,
-		Messages: messages,
+		UserID:         userID,
+		ModelID:        modelID,
+		Messages:       messages,
+		CheckpointPath: checkpointPath,
 	}
 
 	wrappedReq, err := core.NewWrappedRequest(requestID, inferReq)
@@ -191,7 +226,7 @@ func (nc *NexusClient) EnqueueSession(sessionReq *core.SessionRequest) (<-chan *
 	return responseChan, nil
 }
 
-// Update isResponseFinal to handle session responses
+// Update isResponseFinal to handle training responses
 func (nc *NexusClient) isResponseFinal(response *core.WrappedResponse) bool {
 	// Try inference response first
 	var inferResp core.InferenceResponse
@@ -202,6 +237,18 @@ func (nc *NexusClient) isResponseFinal(response *core.WrappedResponse) bool {
 	// Session responses are always final
 	var sessionResp core.SessionResponse
 	if err := json.Unmarshal(response.Data, &sessionResp); err == nil {
+		return true
+	}
+
+	// Training responses are always final
+	var trainResp core.TrainingResponse
+	if err := json.Unmarshal(response.Data, &trainResp); err == nil {
+		return true
+	}
+
+	// Training status responses are always final
+	var trainStatusResp core.TrainingStatusResponse
+	if err := json.Unmarshal(response.Data, &trainStatusResp); err == nil {
 		return true
 	}
 
