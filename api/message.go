@@ -80,13 +80,14 @@ func (router *APIRouter) CreateMessage(w http.ResponseWriter, req *http.Request)
 
 		timeNow := time.Now()
 		message = &storage.CompoundMessage{
-			ID:        db.NewDigest(messageIDBytes),
-			ThreadID:  createReq.ThreadID,
-			ParentID:  createReq.ParentID,
-			Author:    createReq.Author,
-			Messages:  []string{createReq.Content},
-			CreatedAt: timeNow,
-			UpdatedAt: timeNow,
+			ID:          db.NewDigest(messageIDBytes),
+			ThreadID:    createReq.ThreadID,
+			ParentID:    createReq.ParentID,
+			Author:      createReq.Author,
+			Messages:    []string{createReq.Content},
+			Attachments: createReq.Attachments,
+			CreatedAt:   timeNow,
+			UpdatedAt:   timeNow,
 		}
 
 		if err := txn.SetMessage(createReq.ThreadID, message); err != nil {
