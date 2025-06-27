@@ -371,6 +371,18 @@ func (wsh *WebSocketHandler) handleInferenceRequest(ws *websocket.Conn, userID s
 			}
 		}
 
+		// Append attachments to content if they exist
+		if len(msg.Attachments) > 0 {
+			content += "\n\n--- Attached Files ---\n"
+			for i, attachment := range msg.Attachments {
+				content += fmt.Sprintf("\n[File %d: %s (%d lines)]\n", i+1, attachment.Name, attachment.Lines)
+				content += attachment.Content
+				if i < len(msg.Attachments)-1 {
+					content += "\n"
+				}
+			}
+		}
+
 		contextMessages = append(contextMessages, core.Message{
 			Role:    msg.Author,
 			Content: content,
