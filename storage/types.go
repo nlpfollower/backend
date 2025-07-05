@@ -57,6 +57,15 @@ type MessageAttachment struct {
 	Content string `json:"content"`
 }
 
+// MessageType represents the type of message
+type MessageType string
+
+const (
+	MessageTypeDefault  MessageType = "default"
+	MessageTypeTraining MessageType = "training"
+)
+
+// Update the CompoundMessage struct to include MessageType
 type CompoundMessage struct {
 	ID          db.Digest           `json:"id"`
 	ThreadID    db.Digest           `json:"thread_id"`
@@ -64,8 +73,17 @@ type CompoundMessage struct {
 	Author      string              `json:"author"`
 	Messages    []string            `json:"messages"`
 	Attachments []MessageAttachment `json:"attachments,omitempty"`
+	MessageType MessageType         `json:"message_type,omitempty"` // New field
 	CreatedAt   time.Time           `json:"created_at"`
 	UpdatedAt   time.Time           `json:"updated_at"`
+}
+
+// Helper to normalize message type
+func (m *CompoundMessage) GetMessageType() MessageType {
+	if m.MessageType == "" {
+		return MessageTypeDefault
+	}
+	return m.MessageType
 }
 
 func NewKeyFromUint64(value uint64) db.Digest {

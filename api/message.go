@@ -15,6 +15,7 @@ type CreateMessageRequest struct {
 	Author      string                      `json:"author"`
 	Content     string                      `json:"content"`
 	Attachments []storage.MessageAttachment `json:"attachments,omitempty"`
+	MessageType storage.MessageType         `json:"message_type,omitempty"` // New field
 	AuthToken   AuthToken                   `json:"auth_token"`
 }
 
@@ -86,6 +87,7 @@ func (router *APIRouter) CreateMessage(w http.ResponseWriter, req *http.Request)
 			Author:      createReq.Author,
 			Messages:    []string{createReq.Content},
 			Attachments: createReq.Attachments,
+			MessageType: createReq.MessageType,
 			CreatedAt:   timeNow,
 			UpdatedAt:   timeNow,
 		}

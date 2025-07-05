@@ -52,4 +52,11 @@ func (router *APIRouter) SetupRoutes(mux *mux.Router) {
 	mux.HandleFunc("/api/v0/session/status", router.GetSessionStatus).Methods("POST")
 	mux.HandleFunc("/api/v0/session/extend", router.ExtendSession).Methods("POST")
 	mux.HandleFunc("/api/v0/session/stop", router.StopSession).Methods("POST")
+
+	// Training routes
+	mux.HandleFunc("/api/v0/training/start", router.StartTraining).Methods("POST")
+	mux.HandleFunc("/api/v0/training/status", router.GetTrainingStatus).Methods("POST")
+
+	// System status route
+	mux.HandleFunc("/api/v0/system/status", router.GetSystemStatus).Methods("POST")
 }

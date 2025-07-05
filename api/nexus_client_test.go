@@ -131,13 +131,13 @@ func TestNexusClient(t *testing.T) {
 
 	t.Run("Basic Inference Request", func(t *testing.T) {
 		userID := db.NewDigest([]byte("test-user"))
-		modelID := "gpt-4"
+		modelID := "llama-8b"
 		messages := []core.Message{
 			{Role: "user", Content: "Hello"},
 		}
 		checkpointPath := "/mnt/cold/contents/dcp/llama-8b/checkpoint" // Add checkpoint path
 
-		respChan, err := client.EnqueueInference(userID, modelID, messages, checkpointPath)
+		respChan, err := client.EnqueueInference(userID, modelID, messages, checkpointPath, "8B")
 		require.NoError(t, err)
 
 		// Collect responses
