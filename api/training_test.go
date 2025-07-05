@@ -72,6 +72,12 @@ func TestTrainingWorkflow(t *testing.T) {
 
 	// Create a dummy message for the inference request
 	dummyMessage := createTestMessageDirect(t, ts.URL, user, thread, "Test message for inference")
+	require.NotNil(t, dummyMessage, "Dummy message should not be nil")
+	require.NotEmpty(t, dummyMessage.ID, "Dummy message should have an ID")
+	t.Logf("Created dummy message with ID: %v", dummyMessage.ID)
+
+	// Give the database a moment to ensure consistency
+	time.Sleep(100 * time.Millisecond)
 
 	// Connect to WebSocket
 	ws, err := websocket.Dial(ts.WsURL, "", ts.URL)
@@ -521,5 +527,9 @@ func createTestMessageDirect(t *testing.T, baseURL string, user *SignUpResponse,
 
 	msgResp, err := performRequestDirect[CreateMessageRequest, CreateMessageResponse](t, baseURL, "POST", "/api/v0/create-message", msgReq)
 	require.NoError(t, err)
+	require.NotNil(t, msgResp)
+	require.NotNil(t, msgResp.Message)
+	require.NotEmpty(t, msgResp.Message.ID)
+	require.Len(t, msgResp.Message.Messages, 1, "Message should have exactly one content entry")
 	return msgResp.Message
 }
