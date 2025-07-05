@@ -111,7 +111,7 @@ func TestTrainingWorkflow(t *testing.T) {
 	// Clone the base model for training
 	t.Log("=== Cloning base model for training ===")
 	cloneReq := CloneModelRequest{
-		SourceModelID: db.NewDigest([]byte("llama-8b")),
+		SourceModelID: "llama-8b",
 		DisplayName:   "Training Test Model",
 		AuthToken:     user.AuthToken,
 	}
@@ -344,6 +344,7 @@ func TestTrainingWorkflow(t *testing.T) {
 		}
 		if trainingCompleted {
 			t.Log("Training job has completed successfully")
+			time.Sleep(5 * time.Second)
 			break
 		}
 
@@ -549,7 +550,7 @@ func TestSystemStatus(t *testing.T) {
 	thread := createTestThreadDirect(t, httpServer.URL, user, space, "Status Test Thread")
 
 	// Clone a model
-	baseModelID := db.NewDigest([]byte("llama-8b"))
+	baseModelID := "llama-8b"
 	cloneReq := CloneModelRequest{
 		SourceModelID: baseModelID,
 		DisplayName:   "Status Test Model",

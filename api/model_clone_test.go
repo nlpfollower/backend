@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"testing"
 	"time"
@@ -126,7 +128,7 @@ func TestModelCloning(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get user1's model
-		var user1ModelID db.Digest
+		var user1ModelID string
 		err = ts.Server.dbManager.View(func(txn *storage.DatabaseTransaction) error {
 			userID, _ := db.DigestFromString(user.AuthToken.UserID)
 			models, err := txn.GetUserModels(userID, 10, uint64(time.Now().UnixNano()))
@@ -134,7 +136,7 @@ func TestModelCloning(t *testing.T) {
 				return err
 			}
 			if len(models) > 0 {
-				user1ModelID = models[0].ID
+				user1ModelID = string(models[0].ID.Bytes())
 			}
 			return nil
 		})
@@ -179,10 +181,10 @@ func TestCheckpointPathInheritance(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("llama-8b-u%s-c0", userID.String()[:8]), clone1Resp.Model.Name)
 
 	// Simulate training completion (manually create trained model)
-	var trainedModelID db.Digest
+	var modelIDStr string
 	err = ts.Server.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
-		modelIDBytes, _ := GenerateRandomBytes(32)
-		trainedModelID = db.NewDigest(modelIDBytes)
+		modelIDStr, _ := GenerateRandomModelID()
+		trainedModelID := db.NewDigest([]byte(modelIDStr))
 
 		trained := storage.ModelInfo{
 			ID:             trainedModelID,
@@ -204,7 +206,7 @@ func TestCheckpointPathInheritance(t *testing.T) {
 
 	// Clone the trained model (should be c1)
 	clone2Req := CloneModelRequest{
-		SourceModelID: trainedModelID,
+		SourceModelID: modelIDStr,
 		DisplayName:   "Clone of Trained",
 		AuthToken:     user.AuthToken,
 	}
@@ -298,7 +300,7 @@ func TestParentChildRelationships(t *testing.T) {
 	// Test parent-child queries
 	err = ts.Server.dbManager.View(func(txn *storage.DatabaseTransaction) error {
 		// Get children of base model
-		children, err := txn.GetModelsByParent(baseModelID, 10, uint64(time.Now().Add(time.Hour).UnixNano()))
+		children, err := txn.GetModelsByParent(db.NewDigest([]byte(baseModelID)), 10, uint64(time.Now().Add(time.Hour).UnixNano()))
 		require.NoError(t, err)
 		require.Len(t, children, 3)
 
@@ -332,16 +334,27 @@ func TestResolveCheckpointPath(t *testing.T) {
 	require.Contains(t, err.Error(), "has no checkpoint path")
 }
 
-func addBaseModelDirectly(t *testing.T, dbManager *storage.DatabaseManager, modelName, modelSize string) db.Digest {
-	var modelID db.Digest
+func GenerateRandomModelID() (string, error) {
+	const max = 1 << 20 // 1,048,576
+
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	n := binary.BigEndian.Uint32(b[:]) % max
+	return fmt.Sprintf("model-%d", n), nil
+}
+
+func addBaseModelDirectly(t *testing.T, dbManager *storage.DatabaseManager, modelName, modelSize string) string {
+	var modelIDStr string
 
 	err := dbManager.Update(func(txn *storage.DatabaseTransaction) error {
-		modelIDBytes, err := GenerateRandomBytes(32)
+		modelIDStr, err := GenerateRandomModelID()
 		if err != nil {
 			return err
 		}
 
-		modelID = db.NewDigest(modelIDBytes)
+		modelID := db.NewDigest([]byte(modelIDStr))
 		systemUserID := db.NewDigest([]byte("system-base-models"))
 
 		model := storage.ModelInfo{
@@ -362,5 +375,5 @@ func addBaseModelDirectly(t *testing.T, dbManager *storage.DatabaseManager, mode
 	})
 
 	require.NoError(t, err)
-	return modelID
+	return modelIDStr
 }

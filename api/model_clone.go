@@ -12,7 +12,7 @@ import (
 )
 
 type CloneModelRequest struct {
-	SourceModelID db.Digest `json:"source_model_id"`
+	SourceModelID string    `json:"source_model_id"`
 	DisplayName   string    `json:"display_name"`
 	AuthToken     AuthToken `json:"auth_token"`
 }
@@ -44,7 +44,8 @@ func (router *APIRouter) CloneModel(w http.ResponseWriter, req *http.Request) {
 
 	err = router.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
 		// Get source model
-		sourceModel, err := txn.GetModel(cloneReq.SourceModelID)
+		sourceModelID := db.NewDigest([]byte(cloneReq.SourceModelID))
+		sourceModel, err := txn.GetModel(sourceModelID)
 		if err != nil {
 			return errors.Wrap(err, "failed to get source model")
 		}
