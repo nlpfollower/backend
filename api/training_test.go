@@ -216,9 +216,6 @@ func TestTrainingWorkflow(t *testing.T) {
 		}
 	}
 
-	// Give the system a moment to stabilize after model loading
-	time.Sleep(10 * time.Second)
-
 	// STEP 2: Create conversation history
 	t.Log("=== STEP 2: Creating conversation history ===")
 
@@ -337,14 +334,6 @@ func TestTrainingWorkflow(t *testing.T) {
 		case "training":
 			trainingStarted = true
 			t.Log("Training has started")
-
-			// For test purposes, we can stop here since we've verified training started
-			// In production, you'd wait for completion
-			if statusCheckCount > 20 {
-				t.Log("Training confirmed to be running, ending test")
-				trainingCompleted = true
-				goto done
-			}
 
 		case "completed":
 			trainingCompleted = true
