@@ -216,6 +216,9 @@ func TestTrainingWorkflow(t *testing.T) {
 		}
 	}
 
+	// Give the system a moment to stabilize after model loading
+	time.Sleep(10 * time.Second)
+
 	// STEP 2: Create conversation history
 	t.Log("=== STEP 2: Creating conversation history ===")
 
@@ -373,29 +376,129 @@ done:
 	t.Logf("Final training status: %s (Progress: %.2f%%)",
 		finalStatus.Status, finalStatus.Progress*100)
 
-	// Verify model was created if training completed
-	if trainingCompleted && finalStatus.Status == "completed" {
-		// Get user models to verify the trained model exists
-		getModelsReq := GetModelsRequest{
-			AuthToken: user.AuthToken,
-			Limit:     100,
+	// Verify training completed successfully
+	require.True(t, trainingCompleted, "Training should have completed")
+	require.Equal(t, "completed", finalStatus.Status, "Final status should be completed")
+
+	// Get user models to verify the trained model exists
+	getModelsReq := GetModelsRequest{
+		AuthToken: user.AuthToken,
+		Limit:     100,
+	}
+
+	getModelsResp, err := performRequestDirect[GetModelsRequest, GetModelsResponse](t, ts.URL, "POST", "/api/v0/get-models", getModelsReq)
+	require.NoError(t, err)
+
+	// Check if trained model exists
+	foundTrainedModel := false
+	for _, model := range getModelsResp.Models {
+		if model.Name == trainResp.ModelID {
+			foundTrainedModel = true
+			t.Logf("Found trained model: %s", model.Name)
+			break
 		}
+	}
 
-		getModelsResp, err := performRequestDirect[GetModelsRequest, GetModelsResponse](t, ts.URL, "POST", "/api/v0/get-models", getModelsReq)
-		require.NoError(t, err)
+	require.True(t, foundTrainedModel, "Trained model should exist after completion")
 
-		// Check if trained model exists
-		foundTrainedModel := false
-		for _, model := range getModelsResp.Models {
-			if model.Name == trainResp.ModelID {
-				foundTrainedModel = true
-				t.Logf("Found trained model: %s", model.Name)
+	// STEP 5: Test inference on the trained model
+	t.Log("=== STEP 5: Testing inference on trained model ===")
+
+	// Create a new message to test the trained model
+	testMsgReq := CreateMessageRequest{
+		ThreadID:  thread.ID,
+		Content:   "Explain how convolutional neural networks work for image recognition.",
+		Author:    "user",
+		AuthToken: user.AuthToken,
+	}
+	testMsgResp, err := performRequestDirect[CreateMessageRequest, CreateMessageResponse](t, ts.URL, "POST", "/api/v0/create-message", testMsgReq)
+	require.NoError(t, err)
+
+	// Open a new WebSocket connection for inference
+	inferWs, err := websocket.Dial(ts.WsURL, "", ts.URL)
+	require.NoError(t, err)
+	defer inferWs.Close()
+
+	// Send WebSocket handshake
+	handshakeMsg = WSMessage{
+		Type: WSMessageTypeHandshake,
+		Payload: jsonMarshal(t, HandshakeRequest{
+			AuthToken: user.AuthToken,
+		}),
+	}
+	err = websocket.JSON.Send(inferWs, handshakeMsg)
+	require.NoError(t, err)
+
+	// Read handshake response
+	var inferHandshakeRespMsg WSMessage
+	err = websocket.JSON.Receive(inferWs, &inferHandshakeRespMsg)
+	require.NoError(t, err)
+
+	var inferHandshakeResp HandshakeResponse
+	err = json.Unmarshal(inferHandshakeRespMsg.Payload, &inferHandshakeResp)
+	require.NoError(t, err)
+	require.Equal(t, "success", inferHandshakeResp.Status)
+	t.Log("Inference WebSocket handshake successful")
+
+	// Send inference request using the trained model
+	trainedInferMsg := WSMessage{
+		Type: WSMessageTypeInference,
+		Payload: jsonMarshal(t, WSInferenceRequest{
+			LastMessageID: &storage.CompoundMessageID{
+				ID:        testMsgResp.Message.ID,
+				MessageID: 0,
+			},
+			ModelID:   trainResp.ModelID, // Use the trained model
+			AuthToken: user.AuthToken,
+		}),
+	}
+	err = websocket.JSON.Send(inferWs, trainedInferMsg)
+	require.NoError(t, err)
+	t.Logf("Sent inference request to trained model: %s", trainResp.ModelID)
+
+	// Read inference responses
+	var inferenceContent strings.Builder
+	responseCount := 0
+	maxInferenceResponses := 50
+
+	for responseCount < maxInferenceResponses {
+		inferWs.SetReadDeadline(time.Now().Add(2 * time.Minute))
+
+		var respMsg WSMessage
+		err := websocket.JSON.Receive(inferWs, &respMsg)
+		if err != nil {
+			if strings.Contains(err.Error(), "timeout") {
+				t.Log("Inference timeout - ending stream")
 				break
 			}
+			t.Fatalf("Error reading inference response: %v", err)
 		}
 
-		require.True(t, foundTrainedModel, "Trained model should exist after completion")
+		var inferResp WSInferenceResponse
+		err = json.Unmarshal(respMsg.Payload, &inferResp)
+		require.NoError(t, err)
+
+		responseCount++
+
+		if inferResp.Status == "error" {
+			t.Fatalf("Inference error from trained model: %s", inferResp.Content)
+		}
+
+		if inferResp.Content != "" && inferResp.Status != "loading" {
+			inferenceContent.WriteString(inferResp.Content)
+		}
+
+		if inferResp.Type == "final" {
+			t.Log("Received final inference response from trained model")
+			break
+		}
 	}
+
+	// Verify we got some response from the trained model
+	finalContent := inferenceContent.String()
+	require.NotEmpty(t, finalContent, "Should have received content from trained model")
+	t.Logf("Trained model response length: %d characters", len(finalContent))
+	t.Logf("Trained model response preview: %.200s...", finalContent)
 
 	t.Log("Training workflow test completed successfully")
 }
