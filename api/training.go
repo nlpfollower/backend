@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -282,7 +283,7 @@ func (router *APIRouter) StartTraining(w http.ResponseWriter, req *http.Request)
 		UserID:         userID,
 		SourceModelID:  sourceModel.Name,
 		TargetModelID:  newModel.Name,
-		CheckpointPath: sourceModel.CheckpointPath,
+		CheckpointPath: filepath.Join(sourceModel.CheckpointPath, "step-0"),
 		OutputPath:     newModel.CheckpointPath,
 		Dataset:        string(datasetJSON),
 		ModelSize:      modelSize, // Pass the model size
