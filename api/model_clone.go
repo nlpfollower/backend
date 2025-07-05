@@ -63,17 +63,14 @@ func (router *APIRouter) CloneModel(w http.ResponseWriter, req *http.Request) {
 			return errors.Wrap(err, "failed to get/update user")
 		}
 
-		// Generate model ID
-		modelIDBytes, err := GenerateRandomBytes(32)
-		if err != nil {
-			return errors.Wrap(err, "failed to generate model ID")
-		}
-
 		// Generate model name
 		newModelName := fmt.Sprintf("%s-u%s-c%d",
 			sourceModel.BaseModel,
 			userID.String()[:8],
 			cloneNum)
+
+		// Generate model ID from the name (deterministic, not random)
+		modelID := db.NewDigest([]byte(newModelName))
 
 		// Inherit checkpoint path
 		checkpointPath := sourceModel.CheckpointPath
@@ -84,7 +81,7 @@ func (router *APIRouter) CloneModel(w http.ResponseWriter, req *http.Request) {
 		// Create new model
 		timeNow := time.Now()
 		newModel = storage.ModelInfo{
-			ID:             db.NewDigest(modelIDBytes),
+			ID:             modelID,
 			UserID:         userID,
 			Name:           newModelName,
 			DisplayName:    cloneReq.DisplayName,
