@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/nlpfollower/deltamind/nexus/core"
 	"golang.org/x/net/websocket"
 	"net/http"
 	"net/http/httptest"
@@ -217,43 +216,54 @@ func TestTrainingWorkflow(t *testing.T) {
 		}
 	}
 
-	// STEP 2: Create training dataset
-	t.Log("=== STEP 2: Creating training dataset ===")
+	// STEP 2: Create conversation history
+	t.Log("=== STEP 2: Creating conversation history ===")
 
-	contextMessages := []core.Message{
-		{Role: "system", Content: "You are an AI researcher specializing in machine learning and neural networks."},
+	// Create a series of user messages that will form the training dataset
+	trainingExamples := []string{
+		"Explain the transformer architecture in detail, including self-attention mechanisms and positional encoding.",
+		"Describe the process of training a large language model, from data preparation to fine-tuning.",
+		"What are the key differences between supervised, unsupervised, and reinforcement learning?",
+		"Explain gradient descent and its variants (SGD, Adam, RMSprop) with their trade-offs.",
+		"How does batch normalization work and why is it important in deep neural networks?",
+		"Describe the concept of transfer learning and its applications in modern AI.",
+		"What is the vanishing gradient problem and how do techniques like LSTM and GRU address it?",
+		"Explain the role of regularization techniques like dropout and L1/L2 regularization.",
 	}
 
-	// Training prompts
-	trainingPrompts := []string{
-		"Explain the transformer architecture in detail.",
-		"Describe the process of training a large language model.",
-		"What are the key differences between supervised and unsupervised learning?",
-		"Explain gradient descent and its variants.",
+	// Create the training example messages
+	var lastMessageID *storage.CompoundMessageID
+	for i, example := range trainingExamples {
+		// Create user message with training content
+		msgReq := CreateMessageRequest{
+			ThreadID:  thread.ID,
+			ParentID:  lastMessageID,
+			Content:   example,
+			Author:    "user",
+			AuthToken: user.AuthToken,
+		}
+		msgResp, err := performRequestDirect[CreateMessageRequest, CreateMessageResponse](t, ts.URL, "POST", "/api/v0/create-message", msgReq)
+		require.NoError(t, err)
+
+		// Update lastMessageID for next iteration
+		lastMessageID = &storage.CompoundMessageID{
+			ID:        msgResp.Message.ID,
+			MessageID: 0,
+		}
+
+		t.Logf("Added training example %d/%d", i+1, len(trainingExamples))
 	}
 
-	// Simulate dataset (in production, these would be actual model responses)
-	for i, prompt := range trainingPrompts {
-		contextMessages = append(contextMessages,
-			core.Message{Role: "user", Content: prompt},
-			core.Message{Role: "assistant", Content: fmt.Sprintf("Detailed response about: %s [Test content]", prompt)},
-		)
-		t.Logf("Added training example %d/%d", i+1, len(trainingPrompts))
-	}
+	// STEP 3: Create training message
+	t.Log("=== STEP 3: Creating training message ===")
 
-	// Create training dataset
-	dataset := core.TrainingDataset{
-		ContextMessages: contextMessages,
-		TrainingPrompt:  "Advanced machine learning concepts",
-	}
+	// The training message contains the training prompt that describes what to learn
+	trainingPrompt := "Learn to provide comprehensive, technical explanations about machine learning and neural network concepts."
 
-	datasetJSON, err := json.Marshal(dataset)
-	require.NoError(t, err)
-
-	// Create training message with proper message type
 	trainingMsgReq := CreateMessageRequest{
 		ThreadID:    thread.ID,
-		Content:     string(datasetJSON),
+		ParentID:    lastMessageID,
+		Content:     trainingPrompt,
 		Author:      "user",
 		MessageType: storage.MessageTypeTraining,
 		AuthToken:   user.AuthToken,
@@ -269,8 +279,8 @@ func TestTrainingWorkflow(t *testing.T) {
 
 	t.Logf("Created training message with ID: %v", trainingMessageID)
 
-	// STEP 3: Start training
-	t.Log("=== STEP 3: Starting training job ===")
+	// STEP 4: Start training
+	t.Log("=== STEP 4: Starting training job ===")
 
 	trainReq := StartTrainingRequest{
 		MessageID: trainingMessageID,
@@ -314,7 +324,7 @@ func TestTrainingWorkflow(t *testing.T) {
 
 		// Track progress through stages
 		switch statusResp.Status {
-		case "processed_dataset":
+		case "processed_dataset", "dataset_processed":
 			datasetProcessed = true
 			t.Log("Dataset processing completed successfully")
 
