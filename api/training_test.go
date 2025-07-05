@@ -338,17 +338,19 @@ func TestTrainingWorkflow(t *testing.T) {
 		case "completed":
 			trainingCompleted = true
 			t.Log("Training completed successfully")
-			goto done
 
 		case "error":
 			t.Fatalf("Training job failed with error: %s", statusResp.Error)
+		}
+		if trainingCompleted {
+			t.Log("Training job has completed successfully")
+			break
 		}
 
 		// Wait before next check
 		time.Sleep(10 * time.Second)
 	}
 
-done:
 	// Verify the job progressed through expected stages
 	require.True(t, datasetProcessed, "Dataset should have been processed")
 	require.True(t, trainingStarted, "Training should have started")
