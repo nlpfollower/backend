@@ -9,7 +9,6 @@ import (
 	"golang.org/x/net/websocket"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,11 +20,11 @@ import (
 
 // setupTestServerWithNexus creates a test server that connects to a real Nexus instance
 func setupTestServerWithNexus(t *testing.T) (*Server, *storage.DatabaseManager) {
-	// Create a temporary database
-	dbPath := filepath.Join(t.TempDir(), "test.db")
+	// Create a temporary directory for the database
+	dbDir := t.TempDir()
 
 	// Create the server with Nexus on localhost:8081
-	server, err := NewServer(dbPath, 8081)
+	server, err := NewServer(dbDir, 8081)
 	require.NoError(t, err)
 
 	// Start the Nexus client
