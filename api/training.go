@@ -268,11 +268,12 @@ func (router *APIRouter) StartTraining(w http.ResponseWriter, req *http.Request)
 
 	// Ensure model size is properly formatted (uppercase B)
 	modelSize := sourceModel.ModelSize
-	if modelSize != "" && !strings.HasSuffix(modelSize, "B") {
-		modelSize = strings.ToUpper(modelSize) + "B"
-	} else if modelSize != "" {
-		// Ensure the 'B' is uppercase
-		modelSize = strings.TrimSuffix(modelSize, "b") + "B"
+	if modelSize != "" {
+		// Remove any existing 'b' or 'B' suffix
+		modelSize = strings.TrimSuffix(modelSize, "B")
+		modelSize = strings.TrimSuffix(modelSize, "b")
+		// Add uppercase 'B'
+		modelSize = modelSize + "B"
 	}
 
 	// Send training request to Nexus
