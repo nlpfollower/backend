@@ -1,36 +1,69 @@
 package api
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/nlpfollower/deltamind/database/db"
 	"github.com/nlpfollower/deltamind/nexus/core"
 	"golang.org/x/net/websocket"
-	"os"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nlpfollower/deltamind/backend/storage"
+	"github.com/nlpfollower/deltamind/database/db"
 	"github.com/stretchr/testify/require"
 )
 
-func TestTrainingWorkflow(t *testing.T) {
-	// Skip if not using real Nexus
-	if os.Getenv("USE_REAL_NEXUS") != "true" {
-		t.Skip("Skipping training workflow test. Set USE_REAL_NEXUS=true to run.")
-	}
+// setupTestServerWithNexus creates a test server that connects to a real Nexus instance
+func setupTestServerWithNexus(t *testing.T) (*Server, *storage.DatabaseManager) {
+	// Create a temporary database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
 
-	ts := NewTestServer(t)
-	defer ts.Close()
-
-	// Create test user
-	user, err := createTestUser(t, ts, "trainer@example.com", "trainer", "password123")
+	// Create the server with Nexus on localhost:8081
+	server, err := NewServer(dbPath, 8081)
 	require.NoError(t, err)
 
+	// Start the Nexus client
+	server.nexusClient.Start()
+
+	// Wait for Nexus connection
+	time.Sleep(2 * time.Second)
+
+	return server, server.dbManager
+}
+
+func TestTrainingWorkflow(t *testing.T) {
+	// Use setupTestServerWithNexus to connect to real Nexus on port 8081
+	server, dbManager := setupTestServerWithNexus(t)
+	defer server.nexusClient.Stop()
+	defer dbManager.Close()
+
+	// Create HTTP test server wrapper
+	httpServer := httptest.NewServer(server.router)
+	defer httpServer.Close()
+
+	// Create a minimal TestServer-like struct for the helper functions
+	ts := &struct {
+		Server *Server
+		URL    string
+		WsURL  string
+	}{
+		Server: server,
+		URL:    httpServer.URL,
+		WsURL:  "ws" + httpServer.URL[4:] + "/ws", // Convert http:// to ws://
+	}
+
+	// Create test user using the helper with proper URL
+	user := createTestUserDirect(t, ts.URL, "trainer@example.com", "trainer", "password123")
+
 	// Create space and thread
-	space := createTestSpace(t, ts, user)
-	thread := createTestThread(t, ts, user, space, "Training Thread")
+	space := createTestSpaceDirect(t, ts.URL, user)
+	thread := createTestThreadDirect(t, ts.URL, user, space, "Training Thread")
 
 	// Model configuration
 	modelID := "llama-8b"
@@ -39,9 +72,7 @@ func TestTrainingWorkflow(t *testing.T) {
 	t.Log("=== STEP 1: Loading model via WebSocket inference ===")
 
 	// Create a dummy message for the inference request
-	dummyMessages := createTestMessages(t, ts, user, thread, 1)
-	require.NotEmpty(t, dummyMessages)
-	dummyMessage := dummyMessages[0]
+	dummyMessage := createTestMessageDirect(t, ts.URL, user, thread, "Test message for inference")
 
 	// Connect to WebSocket
 	ws, err := websocket.Dial(ts.WsURL, "", ts.URL)
@@ -89,7 +120,7 @@ func TestTrainingWorkflow(t *testing.T) {
 	receivedContent := false
 	maxResponses := 10
 	for i := 0; i < maxResponses; i++ {
-		ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		ws.SetReadDeadline(time.Now().Add(10 * time.Minute))
 
 		var respMsg WSMessage
 		err := websocket.JSON.Receive(ws, &respMsg)
@@ -121,9 +152,6 @@ func TestTrainingWorkflow(t *testing.T) {
 			break
 		}
 	}
-
-	// Give the system a moment to stabilize after model loading
-	time.Sleep(10 * time.Second)
 
 	// STEP 2: Create training dataset
 	t.Log("=== STEP 2: Creating training dataset ===")
@@ -167,7 +195,7 @@ func TestTrainingWorkflow(t *testing.T) {
 		AuthToken:   user.AuthToken,
 	}
 
-	trainingMsgResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/api/v0/create-message", trainingMsgReq)
+	trainingMsgResp, err := performRequestDirect[CreateMessageRequest, CreateMessageResponse](t, ts.URL, "POST", "/api/v0/create-message", trainingMsgReq)
 	require.NoError(t, err)
 
 	trainingMessageID := storage.CompoundMessageID{
@@ -186,7 +214,7 @@ func TestTrainingWorkflow(t *testing.T) {
 		AuthToken: user.AuthToken,
 	}
 
-	trainResp, err := performRequest[StartTrainingRequest, StartTrainingResponse](t, ts, "POST", "/api/v0/training/start", trainReq)
+	trainResp, err := performRequestDirect[StartTrainingRequest, StartTrainingResponse](t, ts.URL, "POST", "/api/v0/training/start", trainReq)
 	require.NoError(t, err)
 	require.NotEmpty(t, trainResp.JobID)
 	t.Logf("Training job started with ID: %s", trainResp.JobID)
@@ -210,7 +238,7 @@ func TestTrainingWorkflow(t *testing.T) {
 			AuthToken: user.AuthToken,
 		}
 
-		statusResp, err := performRequest[GetTrainingStatusRequest, GetTrainingStatusResponse](t, ts, "POST", "/api/v0/training/status", statusReq)
+		statusResp, err := performRequestDirect[GetTrainingStatusRequest, GetTrainingStatusResponse](t, ts.URL, "POST", "/api/v0/training/status", statusReq)
 		require.NoError(t, err)
 
 		// Only log if status changed
@@ -265,7 +293,7 @@ done:
 		AuthToken: user.AuthToken,
 	}
 
-	finalStatus, err := performRequest[GetTrainingStatusRequest, GetTrainingStatusResponse](t, ts, "POST", "/api/v0/training/status", finalStatusReq)
+	finalStatus, err := performRequestDirect[GetTrainingStatusRequest, GetTrainingStatusResponse](t, ts.URL, "POST", "/api/v0/training/status", finalStatusReq)
 	require.NoError(t, err)
 
 	t.Logf("Final training status: %s (Progress: %.2f%%)",
@@ -279,7 +307,7 @@ done:
 			Limit:     100,
 		}
 
-		getModelsResp, err := performRequest[GetModelsRequest, GetModelsResponse](t, ts, "POST", "/api/v0/get-models", getModelsReq)
+		getModelsResp, err := performRequestDirect[GetModelsRequest, GetModelsResponse](t, ts.URL, "POST", "/api/v0/get-models", getModelsReq)
 		require.NoError(t, err)
 
 		// Check if trained model exists
@@ -300,8 +328,13 @@ done:
 
 // TestTrainingStatusTracking tests the status tracking functionality
 func TestTrainingStatusTracking(t *testing.T) {
-	ts := NewTestServer(t)
-	defer ts.Close()
+	server, dbManager := setupTestServerWithNexus(t)
+	defer server.nexusClient.Stop()
+	defer dbManager.Close()
+
+	// Create HTTP test server
+	httpServer := httptest.NewServer(server.router)
+	defer httpServer.Close()
 
 	// Test getting status for non-existent job
 	statusReq := GetTrainingStatusRequest{
@@ -309,19 +342,23 @@ func TestTrainingStatusTracking(t *testing.T) {
 		AuthToken: AuthToken{SessionKey: "test-token"},
 	}
 
-	_, err := performRequest[GetTrainingStatusRequest, GetTrainingStatusResponse](t, ts, "POST", "/api/v0/training/status", statusReq)
+	_, err := performRequestDirect[GetTrainingStatusRequest, GetTrainingStatusResponse](t, httpServer.URL, "POST", "/api/v0/training/status", statusReq)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "401") // Invalid auth token
 }
 
 // TestSystemStatus tests the system status endpoint
 func TestSystemStatus(t *testing.T) {
-	ts := NewTestServer(t)
-	defer ts.Close()
+	server, dbManager := setupTestServerWithNexus(t)
+	defer server.nexusClient.Stop()
+	defer dbManager.Close()
+
+	// Create HTTP test server
+	httpServer := httptest.NewServer(server.router)
+	defer httpServer.Close()
 
 	// Create test user
-	user, err := createTestUser(t, ts, "statususer@example.com", "statususer", "testpass123")
-	require.NoError(t, err)
+	user := createTestUserDirect(t, httpServer.URL, "statususer@example.com", "statususer", "testpass123")
 
 	// Test 1: System status when idle
 	t.Log("Test 1: System status when idle")
@@ -330,7 +367,7 @@ func TestSystemStatus(t *testing.T) {
 		AuthToken: user.AuthToken,
 	}
 
-	statusResp, err := performRequest[GetSystemStatusRequest, GetSystemStatusResponse](t, ts, "POST", "/api/v0/system/status", statusReq)
+	statusResp, err := performRequestDirect[GetSystemStatusRequest, GetSystemStatusResponse](t, httpServer.URL, "POST", "/api/v0/system/status", statusReq)
 	require.NoError(t, err)
 	require.Equal(t, SystemStatusIdle, statusResp.Status)
 	require.Empty(t, statusResp.ActiveTraining)
@@ -340,8 +377,8 @@ func TestSystemStatus(t *testing.T) {
 	t.Log("Test 2: System status with active training")
 
 	// First create necessary setup (space, thread, model, messages)
-	space := createTestSpace(t, ts, user)
-	thread := createTestThread(t, ts, user, space, "Status Test Thread")
+	space := createTestSpaceDirect(t, httpServer.URL, user)
+	thread := createTestThreadDirect(t, httpServer.URL, user, space, "Status Test Thread")
 
 	// Clone a model
 	baseModelID := db.NewDigest([]byte("llama-8b"))
@@ -351,7 +388,7 @@ func TestSystemStatus(t *testing.T) {
 		AuthToken:     user.AuthToken,
 	}
 
-	cloneResp, err := performRequest[CloneModelRequest, CloneModelResponse](t, ts, "POST", "/api/v0/clone-model", cloneReq)
+	cloneResp, err := performRequestDirect[CloneModelRequest, CloneModelResponse](t, httpServer.URL, "POST", "/api/v0/clone-model", cloneReq)
 	require.NoError(t, err)
 
 	// Create a training message
@@ -363,7 +400,7 @@ func TestSystemStatus(t *testing.T) {
 		AuthToken:   user.AuthToken,
 	}
 
-	trainingMsgResp, err := performRequest[CreateMessageRequest, CreateMessageResponse](t, ts, "POST", "/api/v0/create-message", trainingMsgReq)
+	trainingMsgResp, err := performRequestDirect[CreateMessageRequest, CreateMessageResponse](t, httpServer.URL, "POST", "/api/v0/create-message", trainingMsgReq)
 	require.NoError(t, err)
 
 	// Start training
@@ -376,7 +413,7 @@ func TestSystemStatus(t *testing.T) {
 		AuthToken: user.AuthToken,
 	}
 
-	trainResp, err := performRequest[StartTrainingRequest, StartTrainingResponse](t, ts, "POST", "/api/v0/training/start", trainReq)
+	trainResp, err := performRequestDirect[StartTrainingRequest, StartTrainingResponse](t, httpServer.URL, "POST", "/api/v0/training/start", trainReq)
 	if err != nil {
 		t.Fatalf("Failed to start training: %v", err)
 	}
@@ -384,7 +421,7 @@ func TestSystemStatus(t *testing.T) {
 	// Now check system status
 	time.Sleep(2 * time.Second) // Give it a moment to start
 
-	statusResp2, err := performRequest[GetSystemStatusRequest, GetSystemStatusResponse](t, ts, "POST", "/api/v0/system/status", statusReq)
+	statusResp2, err := performRequestDirect[GetSystemStatusRequest, GetSystemStatusResponse](t, httpServer.URL, "POST", "/api/v0/system/status", statusReq)
 	require.NoError(t, err)
 	require.Equal(t, SystemStatusTraining, statusResp2.Status)
 	require.Len(t, statusResp2.ActiveTraining, 1)
@@ -401,4 +438,89 @@ func jsonMarshal(t *testing.T, v interface{}) json.RawMessage {
 	data, err := json.Marshal(v)
 	require.NoError(t, err)
 	return data
+}
+
+// Helper functions for direct HTTP requests (without TestServer)
+func performRequestDirect[Req any, Resp any](t *testing.T, baseURL string, method, path string, req Req) (*Resp, error) {
+	url := fmt.Sprintf("%s%s", baseURL, path)
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	httpReq, err := http.NewRequest(method, url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var response Resp
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+func createTestUserDirect(t *testing.T, baseURL, email, username, password string) *SignUpResponse {
+	passwordHex := hex.EncodeToString(HashPassword(password))
+	signupReq := SignUpRequest{
+		Email:       email,
+		Username:    username,
+		PasswordHex: passwordHex,
+		Method:      storage.AuthMethodEmailPassword,
+	}
+
+	signupResp, err := performRequestDirect[SignUpRequest, SignUpResponse](t, baseURL, "POST", "/api/v0/sign-up", signupReq)
+	require.NoError(t, err)
+	return signupResp
+}
+
+func createTestSpaceDirect(t *testing.T, baseURL string, user *SignUpResponse) *storage.Space {
+	spaceReq := CreateSpaceRequest{
+		Name:        "Test Space",
+		Description: "A test space for threads",
+		AuthToken:   user.AuthToken,
+	}
+
+	spaceResp, err := performRequestDirect[CreateSpaceRequest, CreateSpaceResponse](t, baseURL, "POST", "/api/v0/create-space", spaceReq)
+	require.NoError(t, err)
+	return &spaceResp.Space
+}
+
+func createTestThreadDirect(t *testing.T, baseURL string, user *SignUpResponse, space *storage.Space, title string) *storage.Thread {
+	threadReq := CreateThreadRequest{
+		SpaceID:   space.ID,
+		Title:     title,
+		AuthToken: user.AuthToken,
+	}
+
+	threadResp, err := performRequestDirect[CreateThreadRequest, CreateThreadResponse](t, baseURL, "POST", "/api/v0/create-thread", threadReq)
+	require.NoError(t, err)
+	return &threadResp.Thread
+}
+
+func createTestMessageDirect(t *testing.T, baseURL string, user *SignUpResponse, thread *storage.Thread, content string) *storage.CompoundMessage {
+	msgReq := CreateMessageRequest{
+		ThreadID:  thread.ID,
+		Content:   content,
+		Author:    "user",
+		AuthToken: user.AuthToken,
+	}
+
+	msgResp, err := performRequestDirect[CreateMessageRequest, CreateMessageResponse](t, baseURL, "POST", "/api/v0/create-message", msgReq)
+	require.NoError(t, err)
+	return msgResp.Message
 }
