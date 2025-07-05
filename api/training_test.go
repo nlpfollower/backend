@@ -30,8 +30,23 @@ func setupTestServerWithNexus(t *testing.T) (*Server, *storage.DatabaseManager) 
 	// Start the Nexus client
 	server.nexusClient.Start()
 
-	// Wait for Nexus connection
-	time.Sleep(2 * time.Second)
+	// Wait for Nexus connection to be established
+	maxWait := 30 * time.Second
+	start := time.Now()
+	for time.Since(start) < maxWait {
+		server.nexusClient.mu.Lock()
+		connected := server.nexusClient.isConnected
+		server.nexusClient.mu.Unlock()
+
+		if connected {
+			t.Log("Nexus client connected successfully")
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Give a bit more time for everything to stabilize
+	time.Sleep(1 * time.Second)
 
 	return server, server.dbManager
 }
@@ -41,6 +56,36 @@ func TestTrainingWorkflow(t *testing.T) {
 	server, dbManager := setupTestServerWithNexus(t)
 	defer server.nexusClient.Stop()
 	defer dbManager.Close()
+
+	// Add base model to database if it doesn't exist
+	err := dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		modelID := db.NewDigest([]byte("llama-8b"))
+		existingModel, _ := txn.GetModel(modelID)
+		if existingModel == nil {
+			// Create the base model
+			systemUserID := db.NewDigest([]byte("system-base-models"))
+			timeNow := time.Now()
+			model := storage.ModelInfo{
+				ID:             modelID,
+				UserID:         systemUserID,
+				Name:           "llama-8b",
+				DisplayName:    "llama-8b",
+				ModelType:      storage.ModelTypeBase,
+				BaseModel:      "llama-8b",
+				ModelSize:      "8B",
+				Status:         storage.ModelStatusReady,
+				CheckpointPath: "/mnt/cold/contents/dcp/llama-8b/checkpoint",
+				CreatedAt:      timeNow,
+				UpdatedAt:      timeNow,
+			}
+			if err := txn.SetModel(systemUserID, &model); err != nil {
+				return fmt.Errorf("failed to create base model: %v", err)
+			}
+			t.Log("Added llama-8b base model to database")
+		}
+		return nil
+	})
+	require.NoError(t, err)
 
 	// Create HTTP test server wrapper
 	httpServer := httptest.NewServer(server.router)
