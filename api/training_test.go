@@ -109,8 +109,22 @@ func TestTrainingWorkflow(t *testing.T) {
 	space := createTestSpaceDirect(t, ts.URL, user)
 	thread := createTestThreadDirect(t, ts.URL, user, space, "Training Thread")
 
-	// Model configuration
-	modelID := "llama-8b"
+	// Clone the base model for training
+	t.Log("=== Cloning base model for training ===")
+	cloneReq := CloneModelRequest{
+		SourceModelID: db.NewDigest([]byte("llama-8b")),
+		DisplayName:   "Training Test Model",
+		AuthToken:     user.AuthToken,
+	}
+
+	cloneResp, err := performRequestDirect[CloneModelRequest, CloneModelResponse](t, ts.URL, "POST", "/api/v0/clone-model", cloneReq)
+	require.NoError(t, err)
+	require.NotNil(t, cloneResp)
+	require.NotNil(t, cloneResp.Model)
+
+	// Use the cloned model for training
+	modelID := cloneResp.Model.Name
+	t.Logf("Cloned model created: %s (ID: %s)", modelID, cloneResp.Model.ID)
 
 	// STEP 1: Load the model via WebSocket inference request
 	t.Log("=== STEP 1: Loading model via WebSocket inference ===")
@@ -150,7 +164,7 @@ func TestTrainingWorkflow(t *testing.T) {
 	require.Equal(t, "success", handshakeResp.Status)
 	t.Log("WebSocket handshake successful")
 
-	// Send inference request to trigger model loading
+	// Send inference request to trigger model loading - use the cloned model
 	inferMsg := WSMessage{
 		Type: WSMessageTypeInference,
 		Payload: jsonMarshal(t, WSInferenceRequest{
@@ -158,7 +172,7 @@ func TestTrainingWorkflow(t *testing.T) {
 				ID:        dummyMessage.ID,
 				MessageID: 0,
 			},
-			ModelID:   modelID,
+			ModelID:   modelID, // Use cloned model ID
 			AuthToken: user.AuthToken,
 		}),
 	}
