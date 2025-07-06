@@ -133,6 +133,10 @@ func (router *APIRouter) StartTraining(w http.ResponseWriter, req *http.Request)
 	var sourceModel *storage.ModelInfo
 	var newModel storage.ModelInfo
 
+	// Generate unique job ID early
+	jobIDBytes, _ := GenerateRandomBytes(16)
+	jobID := fmt.Sprintf("job-%x", jobIDBytes)
+
 	err = router.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
 		// Get the training message
 		trainingMsg, err := txn.GetMessage(trainReq.MessageID.ID)
@@ -213,7 +217,7 @@ func (router *APIRouter) StartTraining(w http.ResponseWriter, req *http.Request)
 		// Generate deterministic model ID from name
 		modelID := db.NewDigest([]byte(newModelName))
 
-		// Create new model entry
+		// Create new model entry with training job ID
 		timeNow := time.Now()
 		newModel = storage.ModelInfo{
 			ID:             modelID,
@@ -226,6 +230,7 @@ func (router *APIRouter) StartTraining(w http.ResponseWriter, req *http.Request)
 			ParentID:       &sourceModel.ID, // Points to immediate parent
 			Status:         storage.ModelStatusTraining,
 			CheckpointPath: fmt.Sprintf("/mnt/cold/contents/dcp/%s/checkpoint", newModelName),
+			TrainingJobID:  jobID, // Store the job ID
 			CreatedAt:      timeNow,
 			UpdatedAt:      timeNow,
 		}
@@ -255,10 +260,6 @@ func (router *APIRouter) StartTraining(w http.ResponseWriter, req *http.Request)
 	if len(trainingMessage.Attachments) > 0 {
 		trainingPrompt += formatAttachments(trainingMessage.Attachments)
 	}
-
-	// Generate unique job ID
-	jobIDBytes, _ := GenerateRandomBytes(16)
-	jobID := fmt.Sprintf("job-%x", jobIDBytes)
 
 	// Create dataset structure for Nexus
 	datasetInfo := map[string]interface{}{

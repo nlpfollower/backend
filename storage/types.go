@@ -120,7 +120,8 @@ type ModelInfo struct {
 	ModelSize      string      `json:"model_size"` // "8B" or "70B"
 	ParentID       *db.Digest  `json:"parent_id,omitempty"`
 	Status         ModelStatus `json:"status"`
-	CheckpointPath string      `json:"checkpoint_path"` // Actual checkpoint location
+	CheckpointPath string      `json:"checkpoint_path"`           // Actual checkpoint location
+	TrainingJobID  string      `json:"training_job_id,omitempty"` // Associated training job ID
 	CreatedAt      time.Time   `json:"created_at"`
 	UpdatedAt      time.Time   `json:"updated_at"`
 }

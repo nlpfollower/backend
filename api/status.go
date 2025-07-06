@@ -73,50 +73,127 @@ func (router *APIRouter) GetSystemStatus(w http.ResponseWriter, req *http.Reques
 		ActiveTraining: []TrainingInfo{},
 	}
 
-	// Check for active training jobs - just use the existing training job tracker
+	// Get all user models and check their training status
+	router.dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		// Get all user models
+		models, err := txn.GetUserModels(userID, 100, uint64(time.Now().UnixNano()))
+		if err != nil {
+			return err
+		}
+
+		// Check each model for training status
+		for _, model := range models {
+			if model.Status == storage.ModelStatusTraining && model.TrainingJobID != "" {
+				// Get real-time status from Nexus
+				nexusStatusReq := &nexusCore.TrainingStatusRequest{
+					JobID: model.TrainingJobID,
+				}
+
+				if respChan, err := router.nexusClient.GetTrainingStatus(nexusStatusReq); err == nil {
+					select {
+					case resp, ok := <-respChan:
+						if ok {
+							var statusResp nexusCore.TrainingStatusResponse
+							if err := json.Unmarshal(resp.Data, &statusResp); err == nil {
+								// Update model status if training is complete
+								if statusResp.Status == "completed" {
+									model.Status = storage.ModelStatusReady
+									model.UpdatedAt = time.Now()
+									txn.SetModel(userID, model)
+
+									// Remove from in-memory tracking
+									router.removeTrainingJob(model.TrainingJobID)
+								} else if statusResp.Status == "error" || statusResp.Status == "failed" {
+									model.Status = storage.ModelStatusError
+									model.UpdatedAt = time.Now()
+									txn.SetModel(userID, model)
+
+									// Remove from in-memory tracking
+									router.removeTrainingJob(model.TrainingJobID)
+								} else {
+									// Still training, add to response
+									response.ActiveTraining = append(response.ActiveTraining, TrainingInfo{
+										JobID:     model.TrainingJobID,
+										ModelID:   model.Name,
+										Status:    statusResp.Status,
+										Progress:  statusResp.Progress,
+										StartedAt: statusResp.StartedAt,
+									})
+								}
+							}
+						}
+					case <-time.After(2 * time.Second):
+						// Timeout - assume still training
+						response.ActiveTraining = append(response.ActiveTraining, TrainingInfo{
+							JobID:     model.TrainingJobID,
+							ModelID:   model.Name,
+							Status:    "training",
+							Progress:  0,
+							StartedAt: model.CreatedAt,
+						})
+					}
+				}
+			}
+		}
+
+		return nil
+	})
+
+	// Also check the in-memory training jobs for backward compatibility
 	trainingJobsMu.RLock()
 	for jobID, info := range trainingJobs {
 		if info.UserID == userID {
-			// Get model name
-			var modelName string
-			router.dbManager.View(func(txn *storage.DatabaseTransaction) error {
-				model, err := txn.GetModel(info.ModelID)
-				if err == nil && model != nil {
-					modelName = model.Name
+			// Check if we already added this job from the model check
+			found := false
+			for _, training := range response.ActiveTraining {
+				if training.JobID == jobID {
+					found = true
+					break
 				}
-				return nil
-			})
-
-			// Get real-time status from Nexus if possible
-			status := "running"
-			progress := 0.0
-
-			nexusStatusReq := &nexusCore.TrainingStatusRequest{
-				JobID: jobID,
 			}
 
-			if respChan, err := router.nexusClient.GetTrainingStatus(nexusStatusReq); err == nil {
-				select {
-				case resp, ok := <-respChan:
-					if ok {
-						var statusResp nexusCore.TrainingStatusResponse
-						if err := json.Unmarshal(resp.Data, &statusResp); err == nil {
-							status = statusResp.Status
-							progress = statusResp.Progress
-						}
+			if !found {
+				// Get model name
+				var modelName string
+				router.dbManager.View(func(txn *storage.DatabaseTransaction) error {
+					model, err := txn.GetModel(info.ModelID)
+					if err == nil && model != nil {
+						modelName = model.Name
 					}
-				case <-time.After(2 * time.Second):
-					// Use defaults if Nexus doesn't respond quickly
-				}
-			}
+					return nil
+				})
 
-			response.ActiveTraining = append(response.ActiveTraining, TrainingInfo{
-				JobID:     jobID,
-				ModelID:   modelName,
-				Status:    status,
-				Progress:  progress,
-				StartedAt: info.StartedAt,
-			})
+				// Get real-time status from Nexus if possible
+				status := "running"
+				progress := 0.0
+
+				nexusStatusReq := &nexusCore.TrainingStatusRequest{
+					JobID: jobID,
+				}
+
+				if respChan, err := router.nexusClient.GetTrainingStatus(nexusStatusReq); err == nil {
+					select {
+					case resp, ok := <-respChan:
+						if ok {
+							var statusResp nexusCore.TrainingStatusResponse
+							if err := json.Unmarshal(resp.Data, &statusResp); err == nil {
+								status = statusResp.Status
+								progress = statusResp.Progress
+							}
+						}
+					case <-time.After(2 * time.Second):
+						// Use defaults if Nexus doesn't respond quickly
+					}
+				}
+
+				response.ActiveTraining = append(response.ActiveTraining, TrainingInfo{
+					JobID:     jobID,
+					ModelID:   modelName,
+					Status:    status,
+					Progress:  progress,
+					StartedAt: info.StartedAt,
+				})
+			}
 		}
 	}
 	trainingJobsMu.RUnlock()
@@ -125,7 +202,6 @@ func (router *APIRouter) GetSystemStatus(w http.ResponseWriter, req *http.Reques
 	if len(response.ActiveTraining) > 0 {
 		response.Status = SystemStatusTraining
 	}
-	// We don't track sessions currently, so we'll skip that part
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
