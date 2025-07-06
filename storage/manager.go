@@ -6,6 +6,7 @@ import (
 	"github.com/pkg/errors"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // TransactionFunc represents a function that runs within a transaction
@@ -448,4 +449,81 @@ func (dbTxn *DatabaseTransaction) GetUserAndIncrementCloneNum(userID db.Digest) 
 	}
 
 	return user, cloneNum, nil
+}
+
+// CleanupDuplicateModels removes all duplicate model entries for a user
+func (dbTxn *DatabaseTransaction) CleanupDuplicateModels(userID db.Digest) (int, error) {
+	// Get all models for this user
+	models, err := dbTxn.GetUserModels(userID, 10000, uint64(time.Now().UnixNano()))
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to get user models")
+	}
+
+	// Group by model ID to find duplicates
+	modelsByID := make(map[string][]*ModelInfo)
+	for _, model := range models {
+		idStr := model.ID.String()
+		modelsByID[idStr] = append(modelsByID[idStr], model)
+	}
+
+	// Keep track of unique models (latest version of each)
+	uniqueModels := make(map[string]*ModelInfo)
+	duplicatesRemoved := 0
+
+	// First pass: delete all secondary index entries
+	for modelID, modelList := range modelsByID {
+		// Find the latest version
+		var latest *ModelInfo
+		for _, model := range modelList {
+			if latest == nil || model.UpdatedAt.After(latest.UpdatedAt) {
+				latest = model
+			}
+		}
+		uniqueModels[modelID] = latest
+
+		// Delete ALL secondary index entries for this model
+		for _, model := range modelList {
+			// Delete from user-model index
+			err := dbTxn.client.DeleteUserModel(dbTxn.txn, userID, model.UpdatedAt)
+			if err != nil {
+				// Log but continue
+				fmt.Printf("Warning: failed to delete user-model index for %s at %s: %v\n",
+					model.Name, model.UpdatedAt, err)
+			}
+
+			// Delete from parent index if exists
+			if model.ParentID != nil {
+				err := dbTxn.client.DeleteModelParent(dbTxn.txn, *model.ParentID, model.UpdatedAt)
+				if err != nil {
+					// Log but continue
+					fmt.Printf("Warning: failed to delete parent index for %s: %v\n", model.Name, err)
+				}
+			}
+		}
+
+		if len(modelList) > 1 {
+			duplicatesRemoved += len(modelList) - 1
+		}
+	}
+
+	// Second pass: re-add the unique models with current timestamp
+	for _, model := range uniqueModels {
+		// Update timestamp to now for clean state
+		model.UpdatedAt = time.Now()
+
+		// Re-add to secondary indices
+		err = dbTxn.client.SetUserModel(dbTxn.txn, userID, model.UpdatedAt, model)
+		if err != nil {
+			return duplicatesRemoved, errors.Wrap(err, "failed to re-add user model index")
+		}
+
+		if model.ParentID != nil {
+			err = dbTxn.client.SetModelParent(dbTxn.txn, *model.ParentID, model.UpdatedAt, model)
+			if err != nil {
+				return duplicatesRemoved, errors.Wrap(err, "failed to re-add parent model index")
+			}
+		}
+	}
+
+	return duplicatesRemoved, nil
 }

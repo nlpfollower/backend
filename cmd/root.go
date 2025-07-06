@@ -48,6 +48,7 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(NewListModelsCommand())
 	rootCmd.AddCommand(NewDeleteModelCommand())
 	rootCmd.AddCommand(NewDeleteAllModelsCommand())
+	rootCmd.AddCommand(NewCleanupDuplicateModelsCommand())
 
 	return rootCmd
 }
