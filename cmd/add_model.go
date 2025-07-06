@@ -212,39 +212,65 @@ func printModelInfo(model *storage.ModelInfo) {
 	if model.ParentID != nil {
 		fmt.Printf("  Parent ID: %s\n", model.ParentID.String())
 	}
+	if model.TrainingJobID != "" {
+		fmt.Printf("  Training Job: %s\n", model.TrainingJobID)
+	}
 }
 
 func NewDeleteModelCommand() *cobra.Command {
 	var modelID string
 	var modelName string
+	var userEmail string
+	var allUserModels bool
 	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "delete-model",
-		Short: "Delete a model from the database",
-		Long:  "Delete a model by ID or name. Use --force to skip confirmation.",
+		Short: "Delete a model or all models for a user from the database",
+		Long:  "Delete a model by ID or name, or delete all models for a specific user. Use --force to skip confirmation.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := getConfig(cmd)
+
+			// Check for mutually exclusive options
+			optionCount := 0
+			if modelID != "" {
+				optionCount++
+			}
+			if modelName != "" {
+				optionCount++
+			}
+			if allUserModels {
+				optionCount++
+			}
+
+			if optionCount == 0 {
+				return fmt.Errorf("must specify either --id, --name, or --all-user-models")
+			}
+			if optionCount > 1 {
+				return fmt.Errorf("--id, --name, and --all-user-models are mutually exclusive")
+			}
+
+			if allUserModels {
+				if userEmail == "" {
+					return fmt.Errorf("--user is required when using --all-user-models")
+				}
+				return deleteAllUserModels(cfg.DBPath, userEmail, force)
+			}
+
 			return deleteModel(cfg.DBPath, modelID, modelName, force)
 		},
 	}
 
 	cmd.Flags().StringVar(&modelID, "id", "", "Model ID (hex string)")
 	cmd.Flags().StringVar(&modelName, "name", "", "Model name (for base models)")
+	cmd.Flags().StringVar(&userEmail, "user", "", "User email (required with --all-user-models)")
+	cmd.Flags().BoolVar(&allUserModels, "all-user-models", false, "Delete all models for the specified user")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
 
 	return cmd
 }
 
 func deleteModel(dbPath, modelID, modelName string, force bool) error {
-	if modelID == "" && modelName == "" {
-		return fmt.Errorf("must specify either --id or --name")
-	}
-
-	if modelID != "" && modelName != "" {
-		return fmt.Errorf("specify either --id or --name, not both")
-	}
-
 	dbManager, err := storage.NewDatabaseManager(dbPath)
 	if err != nil {
 		return fmt.Errorf("error creating database manager: %v", err)
@@ -314,6 +340,100 @@ func deleteModel(dbPath, modelID, modelName string, force bool) error {
 	}
 
 	fmt.Printf("Model %s (ID: %s) deleted successfully\n", model.Name, modelDigest.String())
+	return nil
+}
+
+func deleteAllUserModels(dbPath, userEmail string, force bool) error {
+	dbManager, err := storage.NewDatabaseManager(dbPath)
+	if err != nil {
+		return fmt.Errorf("error creating database manager: %v", err)
+	}
+	if err := dbManager.Setup(); err != nil {
+		return fmt.Errorf("error setting up database: %v", err)
+	}
+	defer dbManager.Close()
+
+	userID := db.NewDigest(api.GetUserIDFromEmail(userEmail))
+	var modelsToDelete []*storage.ModelInfo
+
+	// First, get all models for this user
+	err = dbManager.View(func(txn *storage.DatabaseTransaction) error {
+		// Check if user exists
+		user, err := txn.GetUser(userID)
+		if err != nil {
+			return fmt.Errorf("failed to get user: %v", err)
+		}
+		if user == nil {
+			return fmt.Errorf("user not found for email: %s", userEmail)
+		}
+
+		// Get all models for this user
+		models, err := txn.GetUserModels(userID, 1000, uint64(time.Now().UnixNano()))
+		if err != nil {
+			return fmt.Errorf("failed to get user models: %v", err)
+		}
+		modelsToDelete = models
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	if len(modelsToDelete) == 0 {
+		fmt.Printf("No models found for user %s\n", userEmail)
+		return nil
+	}
+
+	// Show models and confirm
+	fmt.Printf("Found %d models for user %s:\n", len(modelsToDelete), userEmail)
+	fmt.Println("================================")
+
+	// Group models by base name to show duplicates
+	modelGroups := make(map[string][]*storage.ModelInfo)
+	for _, model := range modelsToDelete {
+		modelGroups[model.Name] = append(modelGroups[model.Name], model)
+	}
+
+	for modelName, models := range modelGroups {
+		if len(models) == 1 {
+			fmt.Printf("- %s (ID: %s)\n", modelName, models[0].ID.String())
+		} else {
+			fmt.Printf("- %s (%d duplicates)\n", modelName, len(models))
+			for i, model := range models {
+				fmt.Printf("  [%d] ID: %s, Updated: %s\n", i+1, model.ID.String(), model.UpdatedAt.Format(time.RFC3339))
+			}
+		}
+	}
+
+	if !force {
+		fmt.Printf("\nAre you sure you want to delete ALL %d models for user %s? (y/N): ", len(modelsToDelete), userEmail)
+		var response string
+		fmt.Scanln(&response)
+		if response != "y" && response != "Y" {
+			fmt.Println("Deletion cancelled")
+			return nil
+		}
+	}
+
+	// Delete all models
+	deletedCount := 0
+	err = dbManager.Update(func(txn *storage.DatabaseTransaction) error {
+		for _, model := range modelsToDelete {
+			if err := txn.DeleteModel(model.ID); err != nil {
+				fmt.Printf("Warning: failed to delete model %s: %v\n", model.Name, err)
+			} else {
+				deletedCount++
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("error during deletion: %v", err)
+	}
+
+	fmt.Printf("\nSuccessfully deleted %d models for user %s\n", deletedCount, userEmail)
 	return nil
 }
 

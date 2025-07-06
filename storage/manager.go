@@ -109,9 +109,20 @@ func (dbTxn *DatabaseTransaction) SetSpace(userID db.Digest, space *Space) error
 		return errors.New("SetSpace: space is nil")
 	}
 
+	// Check if this is an update by looking for existing space
+	existingSpace, _ := dbTxn.client.GetSpace(dbTxn.txn, space.ID)
+
 	err := dbTxn.client.SetSpace(dbTxn.txn, space)
 	if err != nil {
 		return errors.Wrap(err, "SetSpace: failed to set space")
+	}
+
+	// If updating, remove old secondary index entry
+	if existingSpace != nil && existingSpace.UpdatedAt != space.UpdatedAt {
+		err = dbTxn.client.DeleteUserSpace(dbTxn.txn, userID, existingSpace.UpdatedAt)
+		if err != nil {
+			return errors.Wrap(err, "SetSpace: failed to delete old user space index")
+		}
 	}
 
 	err = dbTxn.client.SetUserSpace(dbTxn.txn, userID, space.UpdatedAt, space)
@@ -160,9 +171,20 @@ func (dbTxn *DatabaseTransaction) SetThread(spaceID db.Digest, thread *Thread) e
 		return errors.New("SetThread: thread is nil")
 	}
 
+	// Check if this is an update by looking for existing thread
+	existingThread, _ := dbTxn.client.GetThread(dbTxn.txn, thread.ID)
+
 	err := dbTxn.client.SetThread(dbTxn.txn, thread)
 	if err != nil {
 		return errors.Wrap(err, "SetThread: failed to set thread")
+	}
+
+	// If updating, remove old secondary index entry
+	if existingThread != nil && existingThread.UpdatedAt != thread.UpdatedAt {
+		err = dbTxn.client.DeleteSpaceThread(dbTxn.txn, spaceID, existingThread.UpdatedAt)
+		if err != nil {
+			return errors.Wrap(err, "SetThread: failed to delete old space thread index")
+		}
 	}
 
 	err = dbTxn.client.SetSpaceThread(dbTxn.txn, spaceID, thread.UpdatedAt, thread)
@@ -211,9 +233,20 @@ func (dbTxn *DatabaseTransaction) SetMessage(threadID db.Digest, msg *CompoundMe
 		return errors.New("SetMessage: message is nil")
 	}
 
+	// Check if this is an update by looking for existing message
+	existingMsg, _ := dbTxn.client.GetMessage(dbTxn.txn, msg.ID)
+
 	err := dbTxn.client.SetMessage(dbTxn.txn, msg)
 	if err != nil {
 		return errors.Wrap(err, "SetMessage: failed to set message")
+	}
+
+	// If updating, remove old secondary index entry
+	if existingMsg != nil && existingMsg.UpdatedAt != msg.UpdatedAt {
+		err = dbTxn.client.DeleteThreadMessage(dbTxn.txn, threadID, existingMsg.UpdatedAt)
+		if err != nil {
+			return errors.Wrap(err, "SetMessage: failed to delete old thread message index")
+		}
 	}
 
 	err = dbTxn.client.SetThreadMessage(dbTxn.txn, threadID, msg.UpdatedAt, msg)
@@ -314,11 +347,32 @@ func (dbTxn *DatabaseTransaction) SetModel(userID db.Digest, model *ModelInfo) e
 		return errors.New("SetModel: model is nil")
 	}
 
+	// Check if this is an update by looking for existing model
+	existingModel, _ := dbTxn.client.GetModel(dbTxn.txn, model.ID)
+
 	err := dbTxn.client.SetModel(dbTxn.txn, model)
 	if err != nil {
 		return errors.Wrap(err, "SetModel: failed to set model")
 	}
 
+	// If updating, remove old secondary index entries
+	if existingModel != nil && existingModel.UpdatedAt != model.UpdatedAt {
+		// Remove old user-model index
+		err = dbTxn.client.DeleteUserModel(dbTxn.txn, userID, existingModel.UpdatedAt)
+		if err != nil {
+			return errors.Wrap(err, "SetModel: failed to delete old user model index")
+		}
+
+		// Remove old parent index if it had a parent
+		if existingModel.ParentID != nil {
+			err = dbTxn.client.DeleteModelParent(dbTxn.txn, *existingModel.ParentID, existingModel.UpdatedAt)
+			if err != nil {
+				return errors.Wrap(err, "SetModel: failed to delete old model parent index")
+			}
+		}
+	}
+
+	// Add new secondary index entries
 	err = dbTxn.client.SetUserModel(dbTxn.txn, userID, model.UpdatedAt, model)
 	if err != nil {
 		return errors.Wrap(err, "SetModel: failed to set user model")
@@ -360,6 +414,14 @@ func (dbTxn *DatabaseTransaction) DeleteModel(modelID db.Digest) error {
 	err = dbTxn.client.DeleteUserModel(dbTxn.txn, model.UserID, model.UpdatedAt)
 	if err != nil {
 		return errors.Wrap(err, "DeleteModel: failed to delete user model")
+	}
+
+	// If model had a parent, remove from parent index
+	if model.ParentID != nil {
+		err = dbTxn.client.DeleteModelParent(dbTxn.txn, *model.ParentID, model.UpdatedAt)
+		if err != nil {
+			return errors.Wrap(err, "DeleteModel: failed to delete model parent index")
+		}
 	}
 
 	return nil
